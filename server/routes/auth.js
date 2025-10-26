@@ -12,8 +12,8 @@ const sendTokenResponse = (user, role, statusCode, res) => {
     const options = {
         expires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict'
+        secure: true,
+        sameSite: 'None'
     };
 
     console.log(`[TOKEN] Issued for ${role}: ${user.email}`);
