@@ -1,157 +1,237 @@
-// /client/app/login/page.js
+"use client";
 
-"use client"; // Client Component for interactive forms
-
-import React, { useState } from 'react';
-import api from '@/services/api'; // Import your custom configured Axios client
-import { useRouter } from 'next/navigation'; // For redirection
+import React, { useState, useEffect } from "react";
+import api from "@/services/api";
+import { useRouter } from "next/navigation";
 
 function LoginPage() {
-    const router = useRouter();
-    const [loginData, setLoginData] = useState({
-        email: '',
-        password: '',
-        role: 'client' // Default role for login select
-    });
-    const [mfaData, setMfaData] = useState({
-        userId: null,
-        role: null,
-        mfaCode: '',
-    });
-    const [step, setStep] = useState('login'); // 'login' or 'mfa'
-    const [error, setError] = useState(null);
-    const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
-    // --- Handlers ---
+  // State for login form
+  const [loginData, setLoginData] = useState({
+    email: "",
+    password: "",
+    role: "client",
+  });
 
-    // Handles form input changes for the login form
-    const handleLoginChange = (e) => {
-        setLoginData({ ...loginData, [e.target.name]: e.target.value });
-    };
+  // State for MFA form
+  const [mfaData, setMfaData] = useState({
+    userId: null,
+    role: null,
+    mfaCode: "",
+  });
 
-    // Handles MFA code input
-    const handleMfaChange = (e) => {
-        setMfaData({ ...mfaData, [e.target.name]: e.target.value });
-    };
+  const [step, setStep] = useState("login"); // 'login' or 'mfa'
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-    // --- API Calls ---
+  // -----------------------------------------------------------
+  // 🟢 HANDLERS
+  // -----------------------------------------------------------
+  const handleLoginChange = (e) =>
+    setLoginData({ ...loginData, [e.target.name]: e.target.value });
 
-    // Stage 1: Initial Login (Password Check & MFA Initiate)
-    const handleLoginSubmit = async (e) => {
-        e.preventDefault();
-        setLoading(true);
-        setError(null);
-        
-        try {
-            const response = await api.post('/auth/login', loginData);
-            
-            // Success: MFA initiated (server returned 200 OK)
-            const { userId, role, msg } = response.data;
-            
-            setMfaData({ userId, role, mfaCode: '' });
-            setStep('mfa'); // Move to the MFA verification screen
-            alert(msg); // Show the alert with the simulated MFA code message
+  const handleMfaChange = (e) =>
+    setMfaData({ ...mfaData, [e.target.name]: e.target.value });
 
-        } catch (err) {
-            console.error("Login Error:", err);
-            setError(err.response?.data?.msg || 'Login failed. Check credentials.');
-        } finally {
-            setLoading(false);
+  // -----------------------------------------------------------
+  // 🔄 AUTO SESSION CHECK ON PAGE LOAD
+  // -----------------------------------------------------------
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const res = await api.get("/auth/check-session"); // implement this route on server
+        if (res.data.loggedIn) {
+          // If user already has a valid session, redirect to dashboard
+          router.push(res.data.role === "freelancer" ? "/freelancer" : "/client");
         }
+      } catch (err) {
+        console.log("No active session or session expired.");
+      }
     };
+    checkSession();
+  }, [router]);
 
-    // Stage 2: MFA Verification and Final JWT Token Issuance
-    const handleMfaSubmit = async (e) => {
-        e.preventDefault();
-        setLoading(true);
-        setError(null);
-        
-        try {
-            // Data needed for verification: userId, role, mfaCode
-            const { userId, role, mfaCode } = mfaData;
-            
-            const response = await api.post('/auth/verify-mfa', {
-                userId,
-                role,
-                mfa_code: mfaCode,
-            });
+  // -----------------------------------------------------------
+  // 🟡 LOGIN: Step 1 (Password check + MFA initiate)
+  // -----------------------------------------------------------
+  const handleLoginSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
 
-            // Success: JWT Cookie is now set on the browser automatically
-            alert("Login successful! Redirecting to dashboard.");
-            
-            // Redirect based on the user's role
-            if (response.data.role === 'freelancer') {
-                router.push('/freelancer');
-            } else {
-                router.push('/client');
-            }
+    console.log("🟢 [FRONTEND] Login request payload:", loginData);
 
-        } catch (err) {
-            console.error("MFA Error:", err);
-            setError(err.response?.data?.msg || 'MFA verification failed.');
-            setStep('login'); // Optionally revert to login step on failure
-        } finally {
-            setLoading(false);
-        }
-    };
+    try {
+      const response = await api.post("/auth/login", loginData);
+      const { userId, role, msg, mfa_verification_code_simulated } =
+        response.data;
 
-    // --- Render Logic ---
+      console.log("✅ [FRONTEND] Login success:", response.data);
 
-    // Renders the initial Email/Password form
-    const renderLoginForm = () => (
-        <form onSubmit={handleLoginSubmit} className="space-y-4">
-            <div>
-                <label className="block text-sm font-medium text-gray-700">Email</label>
-                <input type="email" name="email" value={loginData.email} onChange={handleLoginChange} required className="w-full border border-gray-300 p-2 rounded-md" />
-            </div>
-            <div>
-                <label className="block text-sm font-medium text-gray-700">Password</label>
-                <input type="password" name="password" value={loginData.password} onChange={handleLoginChange} required className="w-full border border-gray-300 p-2 rounded-md" />
-            </div>
-            <div>
-                <label className="block text-sm font-medium text-gray-700">Login Role</label>
-                <select name="role" value={loginData.role} onChange={handleLoginChange} required className="w-full border border-gray-300 p-2 rounded-md">
-                    <option value="client">Client</option>
-                    <option value="freelancer">Freelancer</option>
-                </select>
-            </div>
-            <button type="submit" disabled={loading} className="w-full py-2 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-400">
-                {loading ? 'Verifying...' : 'Log In'}
-            </button>
-        </form>
-    );
+      setMfaData({
+        userId,
+        role: loginData.role,
+        mfaCode: "",
+      });
 
-    // Renders the MFA code input form
-    const renderMfaForm = () => (
-        <form onSubmit={handleMfaSubmit} className="space-y-4">
-            <p className="text-sm text-yellow-600">MFA Required: Enter the code sent to your email/SMS.</p>
-            <div>
-                <label className="block text-sm font-medium text-gray-700">MFA Code</label>
-                <input type="text" name="mfaCode" value={mfaData.mfaCode} onChange={handleMfaChange} required className="w-full border border-gray-300 p-2 rounded-md" />
-            </div>
-            <button type="submit" disabled={loading} className="w-full py-2 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400">
-                {loading ? 'Verifying Code...' : 'Verify Code'}
-            </button>
-            <button type="button" onClick={() => setStep('login')} className="w-full mt-2 py-2 text-sm text-gray-600 hover:text-red-500">
-                Cancel / Back to Login
-            </button>
-        </form>
-    );
+      setStep("mfa");
+      alert(`${msg}\nSimulated MFA code: ${mfa_verification_code_simulated}`);
+    } catch (err) {
+      console.error("❌ [FRONTEND] Login Error:", err);
+      setError(err.response?.data?.msg || "Login failed. Check credentials.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  // -----------------------------------------------------------
+  // 🔵 MFA VERIFY: Step 2 (Code check + JWT issue)
+  // -----------------------------------------------------------
+  const handleMfaSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
 
-    return (
-        <div className="flex justify-center items-center min-h-screen bg-gray-50">
-            <div className="w-full max-w-md p-8 bg-white shadow-lg rounded-xl">
-                <h1 className="text-3xl font-bold mb-6 text-center text-gray-800">PocketLancer Login</h1>
-                
-                {error && (
-                    <p className="text-red-500 bg-red-100 p-3 rounded mb-4 text-sm">{error}</p>
-                )}
+    console.log("🟢 [FRONTEND] MFA verification data:", mfaData);
 
-                {step === 'login' ? renderLoginForm() : renderMfaForm()}
-            </div>
-        </div>
-    );
+    try {
+      const { userId, role, mfaCode } = mfaData;
+
+      if (!userId || !role || !mfaCode) {
+        console.warn("⚠️ Missing MFA fields before sending:", mfaData);
+        throw new Error("Missing MFA fields.");
+      }
+
+      const response = await api.post("/auth/verify-mfa", {
+        userId,
+        role,
+        mfa_code: mfaCode,
+      });
+
+      console.log("✅ [FRONTEND] MFA verification success:", response.data);
+
+      alert("Login successful! Redirecting...");
+
+      router.push(response.data.role === "freelancer" ? "/freelancer" : "/client");
+    } catch (err) {
+      console.error("❌ [FRONTEND] MFA Error:", err);
+      setError(err.response?.data?.msg || "MFA verification failed.");
+      setStep("login");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // -----------------------------------------------------------
+  // 🧩 FORM RENDERING
+  // -----------------------------------------------------------
+  const renderLoginForm = () => (
+    <form onSubmit={handleLoginSubmit} className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700">Email</label>
+        <input
+          type="email"
+          name="email"
+          value={loginData.email}
+          onChange={handleLoginChange}
+          required
+          className="w-full border border-gray-300 p-2 rounded-md"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700">Password</label>
+        <input
+          type="password"
+          name="password"
+          value={loginData.password}
+          onChange={handleLoginChange}
+          required
+          className="w-full border border-gray-300 p-2 rounded-md"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700">Login Role</label>
+        <select
+          name="role"
+          value={loginData.role}
+          onChange={handleLoginChange}
+          required
+          className="w-full border border-gray-300 p-2 rounded-md"
+        >
+          <option value="client">Client</option>
+          <option value="freelancer">Freelancer</option>
+        </select>
+      </div>
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full py-2 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-400"
+      >
+        {loading ? "Verifying..." : "Log In"}
+      </button>
+    </form>
+  );
+
+  const renderMfaForm = () => (
+    <form onSubmit={handleMfaSubmit} className="space-y-4">
+      <p className="text-sm text-yellow-600">
+        MFA Required: Enter the 6-digit code sent to your email/SMS.
+      </p>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700">MFA Code</label>
+        <input
+          type="text"
+          name="mfaCode"
+          value={mfaData.mfaCode}
+          onChange={handleMfaChange}
+          required
+          className="w-full border border-gray-300 p-2 rounded-md"
+        />
+      </div>
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full py-2 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400"
+      >
+        {loading ? "Verifying Code..." : "Verify Code"}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setStep("login")}
+        className="w-full mt-2 py-2 text-sm text-gray-600 hover:text-red-500"
+      >
+        Cancel / Back to Login
+      </button>
+    </form>
+  );
+
+  // -----------------------------------------------------------
+  // 🧠 RETURN JSX
+  // -----------------------------------------------------------
+  return (
+    <div className="flex justify-center items-center min-h-screen bg-gray-50">
+      <div className="w-full max-w-md p-8 bg-white shadow-lg rounded-xl">
+        <h1 className="text-3xl font-bold mb-6 text-center text-gray-800">
+          PocketLancer Login
+        </h1>
+
+        {error && (
+          <p className="text-red-500 bg-red-100 p-3 rounded mb-4 text-sm">
+            {error}
+          </p>
+        )}
+
+        {step === "login" ? renderLoginForm() : renderMfaForm()}
+      </div>
+    </div>
+  );
 }
 
 export default LoginPage;

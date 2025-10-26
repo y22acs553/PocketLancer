@@ -14,6 +14,19 @@ function SearchPage() {
         maxDist: '50', // Default search radius in KM
         skills: ''     // Skills filter (e.g., 'Plumbing, Electrical')
     });
+    const handleBook = async (freelancerId) => {
+  try {
+    const response = await api.post("/bookings", {
+      freelancer_id: freelancerId,
+      service_details: "Electrical Repair at Home",
+      date_time: new Date()
+    });
+    alert("Booking created successfully!");
+  } catch (err) {
+    console.error("Booking Error:", err);
+    alert("Failed to create booking. Make sure you are logged in as a client.");
+  }
+};
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -107,6 +120,12 @@ function SearchPage() {
                         <p className="text-gray-600">Location: [{freelancer.location.coordinates.join(', ')}]</p>
                         <p className="text-gray-800 font-medium">Skills: {freelancer.skills.join(', ') || 'N/A'}</p>
                         <button className="mt-2 text-sm text-blue-500 hover:underline">View Profile</button>
+                        <button
+  onClick={() => handleBook(freelancer._id)}
+  className="mt-2 ml-4 text-sm text-green-600 hover:underline"
+>
+  Book Now
+</button>
                     </div>
                 ))}
             </div>
