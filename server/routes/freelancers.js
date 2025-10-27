@@ -16,7 +16,13 @@ router.get("/search", async (req, res) => {
 
   try {
     for (let i = 0; i < 5; i++) {
-      const skillFilter = skills ? { skills: { $in: skills.split(",").map((s) => s.trim()) } } : {};
+      const skillFilter = skills
+        ? {
+            skills: {
+              $in: skills.split(",").map((s) => new RegExp(`^${s.trim()}$`, "i")),
+            },
+          }
+        : {};
 
       freelancers = await Freelancer.aggregate([
         {

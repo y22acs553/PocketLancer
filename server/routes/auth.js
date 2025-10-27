@@ -1,9 +1,17 @@
 // /server/routes/auth.js
 const express = require('express');
 const router = express.Router();
-const { hashPassword, comparePassword, generateToken, sendMfaCode } = require('../utils/authUtils');
+const { hashPassword, comparePassword, generateToken } = require('../utils/authUtils');
+const { sendOtpEmail } = require("../utils/emailUtils");
 const Client = require('../models/Client');
 const Freelancer = require('../models/Freelancer');
+
+const otpStore = new Map();
+
+
+function generateOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
 // Helper function to send JWT in an HTTP-only cookie
 const sendTokenResponse = (user, role, statusCode, res) => {
@@ -24,10 +32,6 @@ const sendTokenResponse = (user, role, statusCode, res) => {
         role
     });
 };
-
-// ====================================================================
-// A. REGISTRATION ENDPOINT (Handles both roles)
-// ====================================================================
 
 // ====================================================================
 // A. REGISTRATION ENDPOINT (Handles both roles)
@@ -109,47 +113,74 @@ router.post('/register/freelancer', (req, res) => registerUser(req, res, Freelan
 // B. LOGIN ENDPOINT (Stage 1: Login → MFA)
 // ====================================================================
 
-router.post('/login', async (req, res) => {
+router.post("/login", async (req, res) => {
+  try {
     const { email, password, role } = req.body;
+    if (!email || !password || !role)
+      return res.status(400).json({ msg: "Missing login details" });
 
-    console.log('🟢 [LOGIN] Request body:', req.body);
+    const userModel = role === "freelancer" ? Freelancer : Client;
+    const user = await userModel.findOne({ email }).select("+password");
+    if (!user) return res.status(401).json({ msg: "Invalid email or password" });
 
-    if (!email || !password || !role) {
-        console.warn('⚠️ [LOGIN] Missing fields:', req.body);
-        return res.status(400).json({ msg: 'Please enter email, password, and role.' });
-    }
+    const valid = await comparePassword(password, user.password);
+    if (!valid) return res.status(401).json({ msg: "Invalid email or password" });
 
-    const userModel = role === 'freelancer' ? Freelancer : Client;
+    // Generate OTP
+    const otp = generateOtp();
+    otpStore.set(email, { otp, expires: Date.now() + 2 * 60 * 1000 });
 
-    try {
-        const user = await userModel.findOne({ email }).select('+password');
-        if (!user) {
-            console.warn(`❌ [LOGIN-${role}] User not found: ${email}`);
-            return res.status(401).json({ msg: 'Invalid Credentials (User not found).' });
-        }
+    // Send to user
+    await sendOtpEmail(email, otp);
 
-        const isMatch = await comparePassword(password, user.password);
-        if (!isMatch) {
-            console.warn(`❌ [LOGIN-${role}] Password mismatch for ${email}`);
-            return res.status(401).json({ msg: 'Invalid Credentials (Password mismatch).' });
-        }
+    console.log(`✅ OTP generated for ${email}: ${otp}`);
+    res.status(200).json({ success: true, msg: "OTP sent to registered email." });
+  } catch (err) {
+    console.error("❌ Login error:", err.message);
+    res.status(500).json({ msg: "Server error during login." });
+  }
+});
 
-        console.log(`✅ [LOGIN-${role}] Password verified for ${email}`);
-        const mfaCode = await sendMfaCode(user.email);
+// ===============================================================
+// 2️⃣ VERIFY OTP – issue JWT if correct
+// ===============================================================
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { email, role, otp } = req.body;
+    if (!email || !otp || !role)
+      return res.status(400).json({ msg: "Missing fields for OTP verification" });
 
-        console.log(`📨 [MFA] Code sent to ${email}: ${mfaCode} (simulated)`);
+    const entry = otpStore.get(email);
+    if (!entry) return res.status(400).json({ msg: "OTP expired or not found" });
 
-        res.status(200).json({
-            success: true,
-            msg: 'MFA initiated. Please submit the code sent to your contact.',
-            userId: user._id,
-            mfa_verification_code_simulated: mfaCode // for testing
-        });
+    if (Date.now() > entry.expires)
+      return res.status(400).json({ msg: "OTP expired" });
 
-    } catch (err) {
-        console.error(`❌ [LOGIN-${role}] Server error:`, err.message);
-        res.status(500).send('Server Error during login.');
-    }
+    if (entry.otp !== otp)
+      return res.status(400).json({ msg: "Invalid OTP" });
+
+    // OTP valid – clear from store
+    otpStore.delete(email);
+
+    const userModel = role === "freelancer" ? Freelancer : Client;
+    const user = await userModel.findOne({ email });
+    if (!user) return res.status(404).json({ msg: "User not found" });
+
+    const token = generateToken(user._id, role);
+
+    // Send token in cookie
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+      expires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+
+    res.status(200).json({ success: true, msg: "Login successful", token });
+  } catch (err) {
+    console.error("❌ OTP verify error:", err.message);
+    res.status(500).json({ msg: "Server error verifying OTP." });
+  }
 });
 
 // ====================================================================

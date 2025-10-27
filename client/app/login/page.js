@@ -14,25 +14,17 @@ function LoginPage() {
     role: "client",
   });
 
-  // State for MFA form
-  const [mfaData, setMfaData] = useState({
-    userId: null,
-    role: null,
-    mfaCode: "",
+  // State for OTP verification
+  const [otpData, setOtpData] = useState({
+    email: "",
+    role: "",
+    otp: "",
   });
 
-  const [step, setStep] = useState("login"); // 'login' or 'mfa'
+  const [step, setStep] = useState("login"); // 'login' or 'otp'
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
-
-  // -----------------------------------------------------------
-  // 🟢 HANDLERS
-  // -----------------------------------------------------------
-  const handleLoginChange = (e) =>
-    setLoginData({ ...loginData, [e.target.name]: e.target.value });
-
-  const handleMfaChange = (e) =>
-    setMfaData({ ...mfaData, [e.target.name]: e.target.value });
+  const [message, setMessage] = useState("");
 
   // -----------------------------------------------------------
   // 🔄 AUTO SESSION CHECK ON PAGE LOAD
@@ -40,12 +32,11 @@ function LoginPage() {
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const res = await api.get("/auth/check-session"); // implement this route on server
+        const res = await api.get("/auth/check-session");
         if (res.data.loggedIn) {
-          // If user already has a valid session, redirect to dashboard
           router.push(res.data.role === "freelancer" ? "/freelancer" : "/client");
         }
-      } catch (err) {
+      } catch {
         console.log("No active session or session expired.");
       }
     };
@@ -53,78 +44,73 @@ function LoginPage() {
   }, [router]);
 
   // -----------------------------------------------------------
-  // 🟡 LOGIN: Step 1 (Password check + MFA initiate)
+  // 🟡 LOGIN STEP → Validate password + send OTP
   // -----------------------------------------------------------
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-
-    console.log("🟢 [FRONTEND] Login request payload:", loginData);
+    setMessage("");
 
     try {
-      const response = await api.post("/auth/login", loginData);
-      const { userId, role, msg, mfa_verification_code_simulated } =
-        response.data;
+      console.log("🟢 Sending login request:", loginData);
+      const res = await api.post("/auth/login", loginData);
 
-      console.log("✅ [FRONTEND] Login success:", response.data);
-
-      setMfaData({
-        userId,
-        role: loginData.role,
-        mfaCode: "",
-      });
-
-      setStep("mfa");
-      alert(`${msg}\nSimulated MFA code: ${mfa_verification_code_simulated}`);
+      if (res.data.success) {
+        setMessage(res.data.msg || "OTP sent to your email.");
+        setOtpData({
+          email: loginData.email,
+          role: loginData.role,
+          otp: "",
+        });
+        setStep("otp");
+      }
     } catch (err) {
-      console.error("❌ [FRONTEND] Login Error:", err);
-      setError(err.response?.data?.msg || "Login failed. Check credentials.");
+      console.error("❌ Login Error:", err);
+      setError(err.response?.data?.msg || "Invalid credentials or server error.");
     } finally {
       setLoading(false);
     }
   };
 
   // -----------------------------------------------------------
-  // 🔵 MFA VERIFY: Step 2 (Code check + JWT issue)
+  // 🔵 OTP VERIFY STEP → Confirm OTP + login user
   // -----------------------------------------------------------
-  const handleMfaSubmit = async (e) => {
+  const handleOtpSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-
-    console.log("🟢 [FRONTEND] MFA verification data:", mfaData);
+    setMessage("");
 
     try {
-      const { userId, role, mfaCode } = mfaData;
+      console.log("🟢 Verifying OTP:", otpData);
+      const res = await api.post("/auth/verify-otp", otpData);
 
-      if (!userId || !role || !mfaCode) {
-        console.warn("⚠️ Missing MFA fields before sending:", mfaData);
-        throw new Error("Missing MFA fields.");
+      if (res.data.success) {
+        alert("✅ Login successful!");
+        router.push(otpData.role === "freelancer" ? "/freelancer" : "/client");
+      } else {
+        setError(res.data.msg || "OTP verification failed.");
       }
-
-      const response = await api.post("/auth/verify-mfa", {
-        userId,
-        role,
-        mfa_code: mfaCode,
-      });
-
-      console.log("✅ [FRONTEND] MFA verification success:", response.data);
-
-      alert("Login successful! Redirecting...");
-
-      router.push(response.data.role === "freelancer" ? "/freelancer" : "/client");
     } catch (err) {
-      console.error("❌ [FRONTEND] MFA Error:", err);
-      setError(err.response?.data?.msg || "MFA verification failed.");
-      setStep("login");
+      console.error("❌ OTP Verify Error:", err);
+      setError(err.response?.data?.msg || "Invalid or expired OTP.");
     } finally {
       setLoading(false);
     }
   };
 
   // -----------------------------------------------------------
-  // 🧩 FORM RENDERING
+  // 🧩 FORM HANDLERS
+  // -----------------------------------------------------------
+  const handleLoginChange = (e) =>
+    setLoginData({ ...loginData, [e.target.name]: e.target.value });
+
+  const handleOtpChange = (e) =>
+    setOtpData({ ...otpData, [e.target.name]: e.target.value });
+
+  // -----------------------------------------------------------
+  // 🧠 FORM RENDERERS
   // -----------------------------------------------------------
   const renderLoginForm = () => (
     <form onSubmit={handleLoginSubmit} className="space-y-4">
@@ -171,26 +157,27 @@ function LoginPage() {
         disabled={loading}
         className="w-full py-2 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-400"
       >
-        {loading ? "Verifying..." : "Log In"}
+        {loading ? "Sending OTP..." : "Login"}
       </button>
     </form>
   );
 
-  const renderMfaForm = () => (
-    <form onSubmit={handleMfaSubmit} className="space-y-4">
+  const renderOtpForm = () => (
+    <form onSubmit={handleOtpSubmit} className="space-y-4">
       <p className="text-sm text-yellow-600">
-        MFA Required: Enter the 6-digit code sent to your email/SMS.
+        Enter the 6-digit OTP sent to your registered email.
       </p>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700">MFA Code</label>
+        <label className="block text-sm font-medium text-gray-700">OTP</label>
         <input
           type="text"
-          name="mfaCode"
-          value={mfaData.mfaCode}
-          onChange={handleMfaChange}
+          name="otp"
+          value={otpData.otp}
+          onChange={handleOtpChange}
           required
-          className="w-full border border-gray-300 p-2 rounded-md"
+          maxLength={6}
+          className="w-full border border-gray-300 p-2 rounded-md text-center tracking-widest"
         />
       </div>
 
@@ -199,12 +186,16 @@ function LoginPage() {
         disabled={loading}
         className="w-full py-2 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400"
       >
-        {loading ? "Verifying Code..." : "Verify Code"}
+        {loading ? "Verifying OTP..." : "Verify & Login"}
       </button>
 
       <button
         type="button"
-        onClick={() => setStep("login")}
+        onClick={() => {
+          setStep("login");
+          setMessage("");
+          setError(null);
+        }}
         className="w-full mt-2 py-2 text-sm text-gray-600 hover:text-red-500"
       >
         Cancel / Back to Login
@@ -213,7 +204,7 @@ function LoginPage() {
   );
 
   // -----------------------------------------------------------
-  // 🧠 RETURN JSX
+  // 🧭 RENDER
   // -----------------------------------------------------------
   return (
     <div className="flex justify-center items-center min-h-screen bg-gray-50">
@@ -227,8 +218,13 @@ function LoginPage() {
             {error}
           </p>
         )}
+        {message && (
+          <p className="text-green-600 bg-green-50 p-3 rounded mb-4 text-sm">
+            {message}
+          </p>
+        )}
 
-        {step === "login" ? renderLoginForm() : renderMfaForm()}
+        {step === "login" ? renderLoginForm() : renderOtpForm()}
       </div>
     </div>
   );
