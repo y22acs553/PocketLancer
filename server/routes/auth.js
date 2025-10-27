@@ -209,11 +209,18 @@ router.get("/check-session", async (req, res) => {
 
 router.get("/logout", (req, res) => {
   console.log("🔴 [LOGOUT] Clearing token cookie...");
-  res.cookie("token", "none", {
-    expires: new Date(Date.now() + 10 * 1000),
+
+  res.cookie("token", "", {
     httpOnly: true,
+    secure: true,
+    sameSite: "None",
+    expires: new Date(0), // expires immediately
   });
-  res.status(200).json({ success: true, msg: "User logged out successfully." });
+
+  return res.status(200).json({
+    success: true,
+    msg: "User logged out successfully.",
+  });
 });
 
 module.exports = router;

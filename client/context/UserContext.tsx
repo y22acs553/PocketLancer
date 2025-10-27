@@ -46,14 +46,20 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   // 🚪 Logout
-  const logout = async () => {
-    try {
-      await api.get("/auth/logout");
-    } finally {
-      setUser(null);
+const logout = async () => {
+  try {
+    await api.get("/auth/logout");
+  } catch (err) {
+    console.error("Logout error:", err);
+  } finally {
+    setUser(null);
+    // Trigger session recheck
+    const res = await api.get("/auth/check-session");
+    if (!res.data.loggedIn) {
       window.location.href = "/login";
     }
-  };
+  }
+};
 
   return (
     <UserContext.Provider value={{ user, setUser, logout, loading }}>
