@@ -29,25 +29,64 @@ const sendTokenResponse = (user, role, statusCode, res) => {
 // A. REGISTRATION ENDPOINT (Handles both roles)
 // ====================================================================
 
+// ====================================================================
+// A. REGISTRATION ENDPOINT (Handles both roles)
+// ====================================================================
+
 const registerUser = async (req, res, userModel, role) => {
-    const { name, email, password, location } = req.body;
+    const { name, email, password, location, city, skills } = req.body;
 
     console.log(`🟢 [REGISTER-${role.toUpperCase()}] Incoming data:`, req.body);
 
     try {
+        // 1️⃣ Check for duplicate email
         let user = await userModel.findOne({ email });
         if (user) {
             console.warn(`⚠️ [REGISTER-${role}] Duplicate email: ${email}`);
             return res.status(400).json({ msg: `${role} already exists with this email.` });
         }
 
+        // 2️⃣ Basic validation
+        if (!name || !email || !password) {
+            return res.status(400).json({ msg: 'Name, email, and password are required.' });
+        }
+
+        // 3️⃣ For freelancers: ensure valid skills + location
+        let finalLocation = location;
+        let finalSkills = skills;
+
+        if (role === 'freelancer') {
+            // Skills validation
+            if (!skills || !Array.isArray(skills) || skills.length === 0) {
+                return res.status(400).json({ msg: 'Freelancers must include at least one skill.' });
+            }
+
+            // Location validation
+            if (!location || !location.coordinates || location.coordinates.length !== 2) {
+                console.warn('⚠️ [REGISTER-FREELANCER] Missing or invalid coordinates. Using fallback Hyderabad coords.');
+                finalLocation = { type: 'Point', coordinates: [78.47, 17.38] }; // fallback
+            }
+
+            finalSkills = skills.map((s) => s.trim());
+        }
+
+        // 4️⃣ Hash password
         const hashedPassword = await hashPassword(password);
 
+        // 5️⃣ Create user
         user = await userModel.create({
             name,
             email,
             password: hashedPassword,
-            location: location || { coordinates: [0, 0] }
+            ...(role === 'freelancer'
+                ? {
+                      skills: finalSkills,
+                      city: city || 'Hyderabad',
+                      location: finalLocation,
+                  }
+                : {
+                      location: location || { type: 'Point', coordinates: [0, 0] },
+                  }),
         });
 
         console.log(`✅ [REGISTER-${role}] Success for: ${email}`);
@@ -55,15 +94,13 @@ const registerUser = async (req, res, userModel, role) => {
         res.status(201).json({
             success: true,
             msg: `${role} registered successfully. Proceed to login.`,
-            user: { id: user._id, email: user.email, role }
+            user: { id: user._id, email: user.email, role },
         });
-
     } catch (err) {
         console.error(`❌ [REGISTER-${role}] Server error:`, err.message);
         res.status(500).send('Server Error during registration.');
     }
 };
-
 // Routes
 router.post('/register/client', (req, res) => registerUser(req, res, Client, 'client'));
 router.post('/register/freelancer', (req, res) => registerUser(req, res, Freelancer, 'freelancer'));

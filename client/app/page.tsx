@@ -1,65 +1,61 @@
-import Image from "next/image";
+// client/app/page.tsx (or page.js)
 
-export default function Home() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+"use client";
+
+import React from 'react';
+import Link from 'next/link';
+
+const HomePage = () => {
+    // NOTE: Session check logic removed for simplicity here, as the Layout handles auth buttons.
+    // If logged in, you can still redirect them immediately inside a useEffect hook.
+    
+    return (
+        <div className="p-4 md:p-12">
+            
+            {/* 1. Hero Section: Core Value Proposition */}
+            <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-gray-100 rounded-2xl shadow-xl">
+                <h1 className="text-5xl md:text-6xl font-extrabold text-gray-900 mb-6 max-w-4xl">
+                    Connect with <span className="text-blue-600">Local Service Experts</span> Today
+                </h1>
+                <p className="text-xl text-gray-600 mb-10 max-w-3xl">
+                    Find skilled, nearby freelancers for services requiring an on-site presence, all secured with JWT and Multi-Factor Authentication.
+                </p>
+                
+                {/* Primary CTA Button */}
+                <Link href="/search">
+                    <button className="bg-blue-600 text-white py-4 px-10 rounded-full text-xl font-bold hover:bg-blue-700 transition duration-300 shadow-lg">
+                        Start Your Search Now →
+                    </button>
+                </Link>
+            </div>
+            
+            {/* 2. Feature Section: Why PocketLancer? */}
+            <div className="mt-16 text-center">
+                <h2 className="text-4xl font-bold text-gray-800 mb-10">Features Built for Trust and Locality</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    
+                    {/* Feature 1: Location */}
+                    <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
+                        <h3 className="text-2xl font-semibold text-blue-600 mb-3">Geo-Based Matching</h3>
+                        <p className="text-gray-600">Find professionals who are actually close to you, minimizing travel time and hassle. </p>
+                    </div>
+
+                    {/* Feature 2: Security */}
+                    <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
+                        <h3 className="text-2xl font-semibold text-blue-600 mb-3">Secure MFA Login</h3>
+                        <p className="text-gray-600">Authentication protected by JWT and Multi-Factor Authentication (MFA) for maximum data safety.</p>
+                    </div>
+
+                    {/* Feature 3: Booking */}
+                    <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
+                        <h3 className="text-2xl font-semibold text-blue-600 mb-3">Real-Time Booking</h3>
+                        <p className="text-gray-600">View freelancer availability with a built-in calendar and book services instantly.</p>
+                    </div>
+                </div>
+            </div>
+            
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
-}
+    );
+};
+
+export default HomePage;

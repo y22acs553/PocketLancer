@@ -24,7 +24,7 @@ const PORT = process.env.PORT || 5001;
 // Body parser: Allows the app to handle JSON data from request bodies
 app.use(express.json()); 
 app.use(cors({
-  origin: ["https://pocketlancer.org", "https://www.pocketlancer.org"],
+  origin: ["https://pocketlancer.org", "https://www.pocketlancer.org", 'http://localhost:3000'],
   credentials: true
 }));
 // Cookie Parser: Allows the app to read and set cookies (essential for JWT security)
