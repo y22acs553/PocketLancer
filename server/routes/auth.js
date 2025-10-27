@@ -1,117 +1,114 @@
 // /server/routes/auth.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { hashPassword, comparePassword, generateToken } = require('../utils/authUtils');
+const jwt = require("jsonwebtoken");
+const { hashPassword, comparePassword, generateToken } = require("../utils/authUtils");
 const { sendOtpEmail } = require("../utils/emailUtils");
-const Client = require('../models/Client');
-const Freelancer = require('../models/Freelancer');
+const Client = require("../models/Client");
+const Freelancer = require("../models/Freelancer");
 
-const otpStore = new Map();
+const JWT_SECRET = process.env.JWT_SECRET;
+const otpStore = new Map(); // Temporary in-memory OTP store
 
+// ============================================================
+// Helper Functions
+// ============================================================
 
 function generateOtp() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Helper function to send JWT in an HTTP-only cookie
 const sendTokenResponse = (user, role, statusCode, res) => {
-    const token = generateToken(user._id, role);
+  const token = generateToken(user._id, role);
 
-    const options = {
-        expires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day
-        httpOnly: true,
-        secure: true,
-        sameSite: 'None'
-    };
+  const options = {
+    expires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day
+    httpOnly: true,
+    secure: true,
+    sameSite: "None",
+  };
 
-    console.log(`[TOKEN] Issued for ${role}: ${user.email}`);
+  console.log(`[TOKEN] Issued for ${role}: ${user.email}`);
 
-    res.status(statusCode).cookie('token', token, options).json({
-        success: true,
-        token,
-        role
-    });
+  res.status(statusCode).cookie("token", token, options).json({
+    success: true,
+    token,
+    role,
+  });
 };
 
-// ====================================================================
-// A. REGISTRATION ENDPOINT (Handles both roles)
-// ====================================================================
+// ============================================================
+// A. REGISTRATION (Clients + Freelancers)
+// ============================================================
 
 const registerUser = async (req, res, userModel, role) => {
-    const { name, email, password, location, city, skills } = req.body;
+  const { name, email, password, location, city, skills } = req.body;
+  console.log(`🟢 [REGISTER-${role.toUpperCase()}] Incoming data:`, req.body);
 
-    console.log(`🟢 [REGISTER-${role.toUpperCase()}] Incoming data:`, req.body);
-
-    try {
-        // 1️⃣ Check for duplicate email
-        let user = await userModel.findOne({ email });
-        if (user) {
-            console.warn(`⚠️ [REGISTER-${role}] Duplicate email: ${email}`);
-            return res.status(400).json({ msg: `${role} already exists with this email.` });
-        }
-
-        // 2️⃣ Basic validation
-        if (!name || !email || !password) {
-            return res.status(400).json({ msg: 'Name, email, and password are required.' });
-        }
-
-        // 3️⃣ For freelancers: ensure valid skills + location
-        let finalLocation = location;
-        let finalSkills = skills;
-
-        if (role === 'freelancer') {
-            // Skills validation
-            if (!skills || !Array.isArray(skills) || skills.length === 0) {
-                return res.status(400).json({ msg: 'Freelancers must include at least one skill.' });
-            }
-
-            // Location validation
-            if (!location || !location.coordinates || location.coordinates.length !== 2) {
-                console.warn('⚠️ [REGISTER-FREELANCER] Missing or invalid coordinates. Using fallback Hyderabad coords.');
-                finalLocation = { type: 'Point', coordinates: [78.47, 17.38] }; // fallback
-            }
-
-            finalSkills = skills.map((s) => s.trim());
-        }
-
-        // 4️⃣ Hash password
-        const hashedPassword = await hashPassword(password);
-
-        // 5️⃣ Create user
-        user = await userModel.create({
-            name,
-            email,
-            password: hashedPassword,
-            ...(role === 'freelancer'
-                ? {
-                      skills: finalSkills,
-                      city: city || 'Hyderabad',
-                      location: finalLocation,
-                  }
-                : {
-                      location: location || { type: 'Point', coordinates: [0, 0] },
-                  }),
-        });
-
-        console.log(`✅ [REGISTER-${role}] Success for: ${email}`);
-
-        res.status(201).json({
-            success: true,
-            msg: `${role} registered successfully. Proceed to login.`,
-            user: { id: user._id, email: user.email, role },
-        });
-    } catch (err) {
-        console.error(`❌ [REGISTER-${role}] Server error:`, err.message);
-        res.status(500).send('Server Error during registration.');
+  try {
+    // Check for duplicates
+    let user = await userModel.findOne({ email });
+    if (user) {
+      console.warn(`⚠️ [REGISTER-${role}] Duplicate email: ${email}`);
+      return res.status(400).json({ msg: `${role} already exists with this email.` });
     }
-};
-// Routes
-router.post('/register/client', (req, res) => registerUser(req, res, Client, 'client'));
-router.post('/register/freelancer', (req, res) => registerUser(req, res, Freelancer, 'freelancer'));
 
-// ====================================================================
-// B. LOGIN ENDPOINT (Stage 1: Login → MFA)
-// ====================================================================
+    if (!name || !email || !password) {
+      return res.status(400).json({ msg: "Name, email, and password are required." });
+    }
+
+    // Freelancer-specific logic
+    let finalLocation = location;
+    let finalSkills = skills;
+
+    if (role === "freelancer") {
+      if (!skills || !Array.isArray(skills) || skills.length === 0) {
+        return res.status(400).json({ msg: "Freelancers must include at least one skill." });
+      }
+
+      if (!location || !location.coordinates || location.coordinates.length !== 2) {
+        console.warn("⚠️ [REGISTER-FREELANCER] Missing coordinates. Using fallback Hyderabad coords.");
+        finalLocation = { type: "Point", coordinates: [78.47, 17.38] };
+      }
+
+      finalSkills = skills.map((s) => s.trim());
+    }
+
+    const hashedPassword = await hashPassword(password);
+
+    user = await userModel.create({
+      name,
+      email,
+      password: hashedPassword,
+      ...(role === "freelancer"
+        ? {
+            skills: finalSkills,
+            city: city || "Hyderabad",
+            location: finalLocation,
+          }
+        : {
+            location: location || { type: "Point", coordinates: [0, 0] },
+          }),
+    });
+
+    console.log(`✅ [REGISTER-${role}] Success for: ${email}`);
+    res.status(201).json({
+      success: true,
+      msg: `${role} registered successfully. Proceed to login.`,
+      user: { id: user._id, email: user.email, role },
+    });
+  } catch (err) {
+    console.error(`❌ [REGISTER-${role}] Server error:`, err.message);
+    res.status(500).send("Server Error during registration.");
+  }
+};
+
+router.post("/register/client", (req, res) => registerUser(req, res, Client, "client"));
+router.post("/register/freelancer", (req, res) => registerUser(req, res, Freelancer, "freelancer"));
+
+// ============================================================
+// B. LOGIN → Generate OTP
+// ============================================================
 
 router.post("/login", async (req, res) => {
   try {
@@ -128,9 +125,9 @@ router.post("/login", async (req, res) => {
 
     // Generate OTP
     const otp = generateOtp();
-    otpStore.set(email, { otp, expires: Date.now() + 2 * 60 * 1000 });
+    otpStore.set(email, { otp, expires: Date.now() + 2 * 60 * 1000 }); // 2 min expiry
 
-    // Send to user
+    // Send to user email
     await sendOtpEmail(email, otp);
 
     console.log(`✅ OTP generated for ${email}: ${otp}`);
@@ -141,9 +138,10 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ===============================================================
-// 2️⃣ VERIFY OTP – issue JWT if correct
-// ===============================================================
+// ============================================================
+// C. VERIFY OTP → Issue JWT
+// ============================================================
+
 router.post("/verify-otp", async (req, res) => {
   try {
     const { email, role, otp } = req.body;
@@ -152,14 +150,10 @@ router.post("/verify-otp", async (req, res) => {
 
     const entry = otpStore.get(email);
     if (!entry) return res.status(400).json({ msg: "OTP expired or not found" });
+    if (Date.now() > entry.expires) return res.status(400).json({ msg: "OTP expired" });
+    if (entry.otp !== otp) return res.status(400).json({ msg: "Invalid OTP" });
 
-    if (Date.now() > entry.expires)
-      return res.status(400).json({ msg: "OTP expired" });
-
-    if (entry.otp !== otp)
-      return res.status(400).json({ msg: "Invalid OTP" });
-
-    // OTP valid – clear from store
+    // OTP valid
     otpStore.delete(email);
 
     const userModel = role === "freelancer" ? Freelancer : Client;
@@ -168,7 +162,7 @@ router.post("/verify-otp", async (req, res) => {
 
     const token = generateToken(user._id, role);
 
-    // Send token in cookie
+    // Store token in cookie
     res.cookie("token", token, {
       httpOnly: true,
       secure: true,
@@ -183,54 +177,43 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
-// ====================================================================
-// C. MFA Verification (Stage 2: Issue Token)
-// ====================================================================
+// ============================================================
+// D. CHECK SESSION (JWT Validation)
+// ============================================================
 
-router.post('/verify-mfa', async (req, res) => {
-    console.log('🟢 [MFA-VERIFY] Incoming:', req.body);
+router.get("/check-session", async (req, res) => {
+  try {
+    const token = req.cookies.token;
+    if (!token) return res.json({ loggedIn: false });
 
-    try {
-        const { userId, role, mfa_code } = req.body;
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userModel = decoded.role === "freelancer" ? Freelancer : Client;
+    const user = await userModel.findById(decoded.id).select("-password");
 
-        if (!userId || !role || !mfa_code) {
-            console.warn('⚠️ [MFA-VERIFY] Missing fields:', req.body);
-            return res.status(400).json({ msg: 'Missing required fields for MFA verification.' });
-        }
+    if (!user) return res.json({ loggedIn: false });
 
-        if (mfa_code !== '123456') {
-            console.warn(`❌ [MFA-VERIFY] Invalid MFA code for ${userId}`);
-            return res.status(401).json({ msg: 'Invalid MFA code.' });
-        }
-
-        const userModel = role === 'freelancer' ? Freelancer : Client;
-        const user = await userModel.findById(userId);
-
-        if (!user) {
-            console.warn(`❌ [MFA-VERIFY] User not found: ${userId}`);
-            return res.status(404).json({ msg: 'User not found.' });
-        }
-
-        console.log(`✅ [MFA-VERIFY] Success for ${user.email}`);
-        sendTokenResponse(user, role, 200, res);
-
-    } catch (err) {
-        console.error('❌ [MFA-VERIFY] Server error:', err.message);
-        res.status(500).json({ msg: 'Server error during MFA verification.' });
-    }
+    res.json({
+      loggedIn: true,
+      role: decoded.role,
+      user,
+    });
+  } catch (err) {
+    console.error("❌ Session check failed:", err.message);
+    res.json({ loggedIn: false });
+  }
 });
 
-// ====================================================================
-// D. LOGOUT ENDPOINT
-// ====================================================================
+// ============================================================
+// E. LOGOUT
+// ============================================================
 
-router.get('/logout', (req, res) => {
-    console.log('🔴 [LOGOUT] Clearing token cookie...');
-    res.cookie('token', 'none', {
-        expires: new Date(Date.now() + 10 * 1000),
-        httpOnly: true
-    });
-    res.status(200).json({ success: true, msg: 'User logged out successfully.' });
+router.get("/logout", (req, res) => {
+  console.log("🔴 [LOGOUT] Clearing token cookie...");
+  res.cookie("token", "none", {
+    expires: new Date(Date.now() + 10 * 1000),
+    httpOnly: true,
+  });
+  res.status(200).json({ success: true, msg: "User logged out successfully." });
 });
 
 module.exports = router;
