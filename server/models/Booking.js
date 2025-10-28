@@ -1,30 +1,27 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const BookingSchema = new mongoose.Schema({
-    freelancer_id: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Freelancer',
-        required: true,
-    },
-    client_id: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Client',
-        required: true,
-    },
-    service_details: { type: String, required: true },
-    
-    // Critical for real-time scheduling
-    date_time: { type: Date, required: true },
-    status: {
-        type: String,
-        enum: ['Pending', 'Confirmed', 'Completed', 'Cancelled'],
-        default: 'Pending',
-    },
-    payment_status: {
-        type: String,
-        enum: ['Pending', 'Paid', 'Refunded'],
-        default: 'Pending', // Used for Stripe integration
-    },
-}, { timestamps: true });
+const bookingSchema = new mongoose.Schema({
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Client",
+    required: true,
+  },
+  freelancerId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Freelancer",
+    required: true,
+  },
+  serviceType: { type: String, required: true },
+  issueDescription: { type: String },
+  preferredDate: { type: Date, required: true },
+  preferredTime: { type: String, required: true },
+  address: { type: String, required: true },
+  status: {
+    type: String,
+    enum: ["pending", "confirmed", "completed", "cancelled"],
+    default: "pending",
+  },
+  createdAt: { type: Date, default: Date.now },
+});
 
-module.exports = mongoose.model('Booking', BookingSchema);
+module.exports = mongoose.model("Booking", bookingSchema);
