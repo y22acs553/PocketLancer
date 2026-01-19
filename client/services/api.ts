@@ -15,7 +15,7 @@ import axios, { AxiosInstance, AxiosError } from "axios";
  */
 
 const api: AxiosInstance = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api",
+  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5001/api",
   withCredentials: true, // REQUIRED for httpOnly cookies
   headers: {
     "Content-Type": "application/json",

@@ -50,9 +50,24 @@ connectDB();
 // ======================================================
 // 6️⃣ GLOBAL MIDDLEWARE
 // ======================================================
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://www.pocketlancer.org",
+  "https://pocketlancer.org",
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: function (origin, callback) {
+      // allow server-to-server & Postman
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
