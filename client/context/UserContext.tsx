@@ -1,69 +1,71 @@
 "use client";
 
-import React, { createContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import api from "@/services/api";
 
-// 🧠 Define user type
-interface User {
-  _id?: string;
-  email: string;
+export interface User {
+  id: string;
   name: string;
-  role: string;
-  city?: string;
+  email: string;
+  role: "client" | "freelancer";
 }
 
-// 🎯 Define context type
 interface UserContextType {
   user: User | null;
-  setUser: React.Dispatch<React.SetStateAction<User | null>>;
-  logout: () => Promise<void>;
   loading: boolean;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>; // ✅ ADD
 }
 
-// ✅ Create and export context
-export const UserContext = createContext<UserContextType | null>(null);
+const UserContext = createContext<UserContextType | undefined>(undefined);
 
-// ✅ Provider
-export const UserProvider = ({ children }: { children: ReactNode }) => {
+export function UserProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // 🔍 Check active session
-  useEffect(() => {
-    const checkSession = async () => {
-      try {
-        const res = await api.get("/auth/check-session");
-        if (res.data.loggedIn) {
-          setUser(res.data.user);
-        }
-      } catch {
-        setUser(null);
-      } finally {
-        setLoading(false);
+  /**
+   * 🔐 Check session on app load
+   */
+  const fetchSession = async () => {
+    try {
+      const res = await api.get("/auth/check-session");
+      setUser(res.data.user);
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        setUser(null); // normal unauthenticated state
+      } else {
+        console.error("Session check failed", err);
       }
-    };
-    checkSession();
+    }
+  };
+
+  useEffect(() => {
+    fetchSession().finally(() => setLoading(false));
   }, []);
 
-  // 🚪 Logout
-const logout = async () => {
-  try {
-    await api.get("/auth/logout");
-  } catch (err) {
-    console.error("Logout error:", err);
-  } finally {
-    setUser(null);
-    // Trigger session recheck
-    const res = await api.get("/auth/check-session");
-    if (!res.data.loggedIn) {
-      window.location.href = "/login";
+  const refreshUser = async () => {
+    await fetchSession();
+  };
+
+  const logout = async () => {
+    try {
+      await api.post("/auth/logout");
+    } finally {
+      setUser(null);
     }
-  }
-};
+  };
 
   return (
-    <UserContext.Provider value={{ user, setUser, logout, loading }}>
+    <UserContext.Provider value={{ user, loading, logout, refreshUser }}>
       {children}
     </UserContext.Provider>
   );
-};
+}
+
+export function useUser() {
+  const ctx = useContext(UserContext);
+  if (!ctx) {
+    throw new Error("useUser must be used inside UserProvider");
+  }
+  return ctx;
+}

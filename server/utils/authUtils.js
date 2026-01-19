@@ -1,36 +1,22 @@
-// /server/utils/authUtils.js (Simplified for core logic)
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-
-// 1. Hash password before saving to the database
-const hashPassword = async (password) => {
-    const salt = await bcrypt.genSalt(10);
-    return await bcrypt.hash(password, salt);
+export const hashPassword = async (password) => {
+  return await bcrypt.hash(password, 12);
 };
 
-// 2. Compare submitted password with the stored hash during login
-const comparePassword = (inputPassword, storedHash) => {
-    return bcrypt.compare(inputPassword, storedHash);
+export const comparePassword = async (password, hashed) => {
+  return await bcrypt.compare(password, hashed);
 };
 
-// 3. Generate the final JWT upon successful MFA verification
-const generateToken = (userId, role) => {
-    return jwt.sign(
-        { id: userId, role: role },
-        process.env.JWT_SECRET,
-        { expiresIn: '1d' }
-    );
+export const generateToken = (id, role) => {
+  return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+    expiresIn: "1d",
+  });
 };
 
-// 4. Conceptual MFA Code Generator/Sender (MFA is a two-step process)
-const sendMfaCode = async (email) => {
-    // In a production app, this would use the Twilio package to send a real SMS or email.
-    const code = Math.floor(100000 + Math.random() * 900000).toString(); 
-    console.log(`[MFA] Code for ${email}: ${code}`);
-    
-    // For now, we return the code to simulate a check and save it to the session/cache later.
-    return code; 
+export const generateOtpToken = (data) => {
+  return jwt.sign(data, process.env.JWT_SECRET, {
+    expiresIn: "10m",
+  });
 };
-
-module.exports = { hashPassword, comparePassword, generateToken, sendMfaCode };

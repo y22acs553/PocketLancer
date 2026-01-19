@@ -1,29 +1,23 @@
 {
-  "name": "server",
+  "name": "pocketlancer-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "type": "module",
+  "main": "index.mjs",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.mjs",
+    "dev": "nodemon index.mjs"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "bcryptjs": "^3.0.2",
+    "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
-    "crypto": "^1.0.1",
-    "dotenv": "^17.2.3",
-    "express": "^5.1.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.19.2",
-    "nodemailer": "^7.0.10",
-    "nodemon": "^3.1.10",
-    "resend": "^6.3.0",
-    "twilio": "^5.10.3"
+    "mongoose": "^8.9.5",
+    "resend": "^6.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
   }
 }

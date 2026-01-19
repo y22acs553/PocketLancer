@@ -1,27 +1,64 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const bookingSchema = new mongoose.Schema({
-  clientId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Client",
-    required: true,
-  },
-  freelancerId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Freelancer",
-    required: true,
-  },
-  serviceType: { type: String, required: true },
-  issueDescription: { type: String },
-  preferredDate: { type: Date, required: true },
-  preferredTime: { type: String, required: true },
-  address: { type: String, required: true },
-  status: {
-    type: String,
-    enum: ["pending", "confirmed", "completed", "cancelled"],
-    default: "pending",
-  },
-  createdAt: { type: Date, default: Date.now },
-});
+const BookingSchema = new mongoose.Schema(
+  {
+    clientId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
 
-module.exports = mongoose.model("Booking", bookingSchema);
+    freelancerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Freelancer",
+      required: true,
+    },
+
+    serviceType: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    issueDescription: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    // ⏱️ TIME MODEL (NEW)
+    startTime: {
+      type: Date,
+      required: true,
+    },
+
+    endTime: {
+      type: Date,
+      required: true,
+    },
+
+    estimatedDurationMinutes: {
+      type: Number,
+      required: true,
+    },
+
+    address: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    status: {
+      type: String,
+      enum: ["pending", "confirmed", "completed", "cancelled"],
+      default: "pending",
+    },
+  },
+  { timestamps: true },
+);
+
+// ⚡ SPEED UP CONFLICT CHECKS
+BookingSchema.index({ freelancerId: 1, startTime: 1, endTime: 1 });
+
+const Booking = mongoose.model("Booking", BookingSchema);
+export default Booking;

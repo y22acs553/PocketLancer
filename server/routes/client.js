@@ -1,23 +1,31 @@
-const express = require('express');
+import express from "express";
 const router = express.Router();
-const { protect, authorize } = require('../middleware/auth');
-const Booking = require('../models/Booking'); // your bookings collection/model
 
-// GET /client/dashboard
-router.get('/dashboard', protect, authorize('client'), async (req, res) => {
+// ⚠️ IMPORTANT: In ES Modules, local files MUST end with .js
+import { protect, authorize } from "../middleware/auth.js";
+import Booking from "../models/Booking.js";
+
+// GET /api/client/dashboard
+router.get("/dashboard", protect, authorize("client"), async (req, res) => {
   try {
-    const clientId = req.user._id;
+    const userId = req.user._id;
 
-    // Count bookings by status
-    const open = await Booking.countDocuments({ client: clientId, status: 'open' });
-    const completed = await Booking.countDocuments({ client: clientId, status: 'completed' });
-    const pending = await Booking.countDocuments({ client: clientId, status: 'pending' });
+    // Industry Standard: Run all counts at the same time using Promise.all (faster)
+    const [pending, confirmed, completed] = await Promise.all([
+      Booking.countDocuments({ customer: userId, status: "pending" }),
+      Booking.countDocuments({ customer: userId, status: "confirmed" }),
+      Booking.countDocuments({ customer: userId, status: "completed" }),
+    ]);
 
-    res.json({ open, completed, pending });
+    res.json({
+      success: true,
+      stats: { pending, confirmed, completed },
+    });
   } catch (err) {
-    console.error('❌ [CLIENT DASHBOARD ERROR]', err);
-    res.status(500).json({ msg: 'Failed to fetch dashboard stats.' });
+    console.error("❌ [CLIENT DASHBOARD ERROR]", err);
+    res.status(500).json({ msg: "Failed to fetch dashboard stats." });
   }
 });
 
-module.exports = router;
+// Use ES Module export
+export default router;

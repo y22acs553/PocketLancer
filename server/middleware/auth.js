@@ -1,50 +1,76 @@
-const jwt = require('jsonwebtoken');
-const Client = require('../models/Client');
-const Freelancer = require('../models/Freelancer');
+import jwt from "jsonwebtoken";
+import User from "../models/User.js";
 
-const protect = async (req, res, next) => {
-  let token;
+/**
+ * AUTH MIDDLEWARE
+ * ----------------
+ * Purpose:
+ * - Allow access ONLY if a valid session exists
+ * - Fail quietly for unauthenticated users
+ * - Fail loudly only for real security issues
+ *
+ * Industry rule:
+ * - 401 = not logged in (normal state)
+ * - 403 = logged in but not allowed
+ */
 
-  // ✅ Check cookies first
-  if (req.cookies?.token) {
-    token = req.cookies.token;
-    console.log('🟢 [AUTH] Token found in cookies.');
-  } else if (req.headers.authorization?.startsWith('Bearer')) {
-    token = req.headers.authorization.split(' ')[1];
-    console.log('🟢 [AUTH] Token found in Authorization header.');
-  } else {
-    console.warn('⚠️ [AUTH] No token provided.');
-    return res.status(401).json({ msg: 'Not authorized, no token provided.' });
-  }
-
+export const protect = async (req, res, next) => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log('🟢 [AUTH] Token decoded:', decoded);
+    const token = req.cookies?.token;
 
-    const userModel = decoded.role === 'freelancer' ? Freelancer : Client;
-    const user = await userModel.findById(decoded.id || decoded.userId).select('-password');
-
-    if (!user) {
-      console.warn('⚠️ [AUTH] User not found for decoded token:', decoded);
-      return res.status(401).json({ msg: 'User not found or token invalid.' });
+    // User is not logged in (this is NORMAL, not an error)
+    if (!token) {
+      return res.status(401).json({
+        msg: "Not authenticated",
+      });
     }
 
+    // Verify token integrity
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Fetch user
+    const user = await User.findById(decoded.id).select("-password");
+
+    // Token valid but user deleted or corrupted
+    if (!user) {
+      res.clearCookie("token");
+      return res.status(401).json({
+        msg: "Session invalid. Please log in again.",
+      });
+    }
+
+    // Attach user to request
     req.user = user;
-    req.user.role = decoded.role;
-    req.role = decoded.role;
+    next();
+  } catch (err) {
+    // Token expired or tampered
+    res.clearCookie("token");
+    return res.status(401).json({
+      msg: "Session expired. Please log in again.",
+    });
+  }
+};
+
+/**
+ * ROLE-BASED AUTHORIZATION
+ * -----------------------
+ * Example usage:
+ * authorize("freelancer")
+ */
+export const authorize = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        msg: "Not authenticated",
+      });
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        msg: "Access denied",
+      });
+    }
 
     next();
-  } catch (error) {
-    console.error('❌ [AUTH] Token verification failed:', error.message);
-    return res.status(401).json({ msg: 'Not authorized, token verification failed.' });
-  }
+  };
 };
-
-const authorize = (...roles) => (req, res, next) => {
-  if (!roles.includes(req.user.role)) {
-    return res.status(403).json({ msg: `User role ${req.user.role} is not authorized.` });
-  }
-  next();
-};
-
-module.exports = { protect, authorize };

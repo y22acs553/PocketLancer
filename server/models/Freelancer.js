@@ -1,18 +1,89 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const FreelancerSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  city: { type: String },
-  location: {
-    type: { type: String, enum: ["Point"], default: "Point" },
-    coordinates: { type: [Number], required: true, index: "2dsphere" },
+/**
+ * GeoJSON Point Schema
+ * MongoDB expects coordinates as [longitude, latitude]
+ */
+const GeoPointSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: ["Point"],
+      required: true,
+      default: "Point",
+    },
+    coordinates: {
+      type: [Number], // [lng, lat]
+      required: true,
+      validate: {
+        validator: function (coords) {
+          if (!Array.isArray(coords) || coords.length !== 2) return false;
+          const [lng, lat] = coords;
+          return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+        },
+        message: "Invalid longitude/latitude coordinates",
+      },
+    },
   },
-  skills: [String],
-  portfolio: [String],
-  reviews: [{ type: mongoose.Schema.Types.ObjectId, ref: "Review" }],
-  availability: { type: Object, default: {} },
-});
+  { _id: false },
+);
 
-module.exports = mongoose.model("Freelancer", FreelancerSchema);
+const FreelancerSchema = new mongoose.Schema(
+  {
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      unique: true,
+    },
+
+    title: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    bio: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    skills: {
+      type: [String],
+      default: [],
+    },
+
+    hourlyRate: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // 🔴 GEO LOCATION (CORE FEATURE)
+    location: {
+      type: GeoPointSchema,
+      required: true,
+    },
+
+    // Stored for UX / display only
+    city: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    country: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+  },
+  { timestamps: true },
+);
+
+// 🚀 REQUIRED FOR GEO QUERIES
+FreelancerSchema.index({ location: "2dsphere" });
+
+const Freelancer = mongoose.model("Freelancer", FreelancerSchema);
+export default Freelancer;
