@@ -5,7 +5,10 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: "http://localhost:5001/api/:path*",
+        destination:
+          process.env.NODE_ENV === "production"
+            ? "https://pocketlancer.onrender.com/api/:path*"
+            : "http://localhost:5001/api/:path*",
       },
     ];
   },
