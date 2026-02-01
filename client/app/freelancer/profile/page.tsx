@@ -6,29 +6,32 @@ import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
 import { getCurrentLocation, reverseGeocode } from "@/utils/geolocation";
 
+type Profile = {
+  title: string;
+  bio: string;
+  skills: string[];
+  hourlyRate: number;
+  latitude: number | null;
+  longitude: number | null;
+  city: string;
+  country: string;
+};
+
 export default function FreelancerProfilePage() {
   const { user, loading } = useUser();
   const router = useRouter();
 
-  const [profile, setProfile] = useState<{
-    title: string;
-    bio: string;
-    skills: string[];
-    hourlyRate: number;
-    latitude: number | null;
-    longitude: number | null;
-    city: string;
-    country: string;
-  } | null>(null);
-
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [saving, setSaving] = useState(false);
+
   const [locationStatus, setLocationStatus] = useState<
     "idle" | "fetching" | "ready" | "error"
   >("idle");
+
   const [error, setError] = useState("");
 
   /* ----------------------------------------
-     AUTH + ROLE GUARD (NO SIDE EFFECTS)
+     AUTH + ROLE GUARD
   ----------------------------------------- */
   useEffect(() => {
     if (!loading && (!user || user.role !== "freelancer")) {
@@ -45,8 +48,16 @@ export default function FreelancerProfilePage() {
     api
       .get("/freelancers/me")
       .then((res) => {
-        setProfile(res.data.profile);
-        setLocationStatus("ready");
+        const loaded: Profile = res.data.profile;
+
+        setProfile(loaded);
+
+        // ✅ Only mark ready if coords exist
+        if (loaded?.latitude != null && loaded?.longitude != null) {
+          setLocationStatus("ready");
+        } else {
+          setLocationStatus("idle");
+        }
       })
       .catch(() => {
         setProfile({
@@ -59,6 +70,7 @@ export default function FreelancerProfilePage() {
           city: "",
           country: "",
         });
+        setLocationStatus("idle");
       });
   }, [user]);
 
@@ -71,24 +83,40 @@ export default function FreelancerProfilePage() {
       setError("");
 
       const { latitude, longitude } = await getCurrentLocation();
-      const { city, country } = await reverseGeocode(latitude, longitude);
 
+      // ✅ Always store coords immediately
       setProfile((prev) =>
         prev
           ? {
               ...prev,
               latitude,
               longitude,
-              city,
-              country,
             }
           : prev,
       );
 
+      // Reverse geocode is OPTIONAL (do not block saving)
+      try {
+        const { city, country } = await reverseGeocode(latitude, longitude);
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                city,
+                country,
+              }
+            : prev,
+        );
+      } catch (e) {
+        // Ignore reverse geocode failure in production/incognito
+      }
+
       setLocationStatus("ready");
-    } catch {
+    } catch (err: any) {
       setLocationStatus("error");
-      setError("Location permission is required to continue.");
+      setError(
+        "Unable to fetch location. Please allow location access and try again.",
+      );
     }
   };
 
@@ -100,6 +128,7 @@ export default function FreelancerProfilePage() {
 
     if (profile.latitude == null || profile.longitude == null) {
       setError("Please allow location access before saving.");
+      setLocationStatus("idle");
       return;
     }
 
@@ -123,6 +152,8 @@ export default function FreelancerProfilePage() {
     return <p className="p-6">Loading profile…</p>;
   }
 
+  const hasCoords = profile.latitude != null && profile.longitude != null;
+
   return (
     <div className="mx-auto max-w-3xl p-6">
       <h1 className="mb-6 text-3xl font-semibold text-slate-900">
@@ -133,10 +164,12 @@ export default function FreelancerProfilePage() {
       <div className="mb-6 rounded-xl border bg-white p-4">
         <h2 className="mb-2 font-semibold">Location (Required)</h2>
 
-        {locationStatus !== "ready" && (
+        {!hasCoords && (
           <button
+            type="button"
             onClick={fetchLocation}
-            className="rounded bg-brand-primary px-4 py-2 font-semibold text-white"
+            disabled={locationStatus === "fetching"}
+            className="rounded bg-brand-primary px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {locationStatus === "fetching"
               ? "Fetching location…"
@@ -144,9 +177,10 @@ export default function FreelancerProfilePage() {
           </button>
         )}
 
-        {locationStatus === "ready" && (
+        {hasCoords && (
           <p className="text-slate-700">
-            📍 {profile.city}, {profile.country}
+            📍 {profile.city ? profile.city : "Detected"},{" "}
+            {profile.country ? profile.country : "Location"}
           </p>
         )}
 
@@ -199,11 +233,12 @@ export default function FreelancerProfilePage() {
         />
 
         <button
+          type="button"
+          disabled={saving || !hasCoords}
           onClick={saveProfile}
-          disabled={saving}
-          className="rounded bg-brand-primary px-4 py-2 font-semibold text-white disabled:opacity-60"
+          className="rounded bg-brand-primary px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {saving ? "Saving…" : "Save Profile"}
+          {saving ? "Saving..." : "Save Profile"}
         </button>
       </div>
     </div>

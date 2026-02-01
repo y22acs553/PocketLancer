@@ -90,6 +90,22 @@ export const authorize = (...allowedRoles) => {
   };
 };
 
+--- FILE: ./server/constants/serviceDurations.js ---
+
+export const SERVICE_DURATIONS = {
+  "ac repair": 120,
+  "ac installation": 480,
+  "ac fitting": 480,
+  electrician: 90,
+  plumber: 90,
+  "washing machine repair": 120,
+  "refrigerator repair": 120,
+  "tv repair": 120,
+  "web development": 240,
+  "software debugging": 180,
+  "general service": 60, // fallback
+};
+
 --- FILE: ./server/utils/emailUtils.js ---
 
 import { Resend } from "resend";
@@ -198,13 +214,19 @@ const BookingSchema = new mongoose.Schema(
       default: "",
     },
 
-    preferredDate: {
+    // ⏱️ TIME MODEL (NEW)
+    startTime: {
       type: Date,
       required: true,
     },
 
-    preferredTime: {
-      type: String,
+    endTime: {
+      type: Date,
+      required: true,
+    },
+
+    estimatedDurationMinutes: {
+      type: Number,
       required: true,
     },
 
@@ -222,6 +244,9 @@ const BookingSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+// ⚡ SPEED UP CONFLICT CHECKS
+BookingSchema.index({ freelancerId: 1, startTime: 1, endTime: 1 });
 
 const Booking = mongoose.model("Booking", BookingSchema);
 export default Booking;
@@ -2346,6 +2371,7 @@ import express from "express";
 import Booking from "../models/Booking.js";
 import Freelancer from "../models/Freelancer.js";
 import { protect, authorize } from "../middleware/auth.js";
+import { SERVICE_DURATIONS } from "../constants/serviceDurations.js";
 
 const router = express.Router();
 
@@ -2362,41 +2388,57 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     address,
   } = req.body;
 
-  if (
-    !freelancer_id ||
-    !serviceType ||
-    !preferredDate ||
-    !preferredTime ||
-    !address
-  ) {
-    return res
-      .status(400)
-      .json({ success: false, msg: "Missing booking details." });
-  }
-
   try {
     const freelancer = await Freelancer.findById(freelancer_id);
     if (!freelancer) {
-      return res
-        .status(404)
-        .json({ success: false, msg: "Freelancer not found." });
+      return res.status(404).json({ msg: "Freelancer not found" });
     }
 
+    // ✅ 1. Calculate duration
+    const estimatedDurationMinutes = getServiceDuration(serviceType);
+
+    // ✅ 2. Build start & end time
+    const startTime = new Date(`${preferredDate}T${preferredTime}`);
+    const endTime = new Date(
+      startTime.getTime() + estimatedDurationMinutes * 60000,
+    );
+
+    // ✅ 3. Block overlapping bookings
+    const conflict = await Booking.findOne({
+      freelancerId: freelancer._id,
+      status: { $in: ["pending", "confirmed"] },
+      $or: [
+        {
+          startTime: { $lt: endTime },
+          endTime: { $gt: startTime },
+        },
+      ],
+    });
+
+    if (conflict) {
+      return res.status(409).json({
+        msg: "Freelancer already booked during this time",
+      });
+    }
+
+    // ✅ 4. Create booking
     const booking = await Booking.create({
-      freelancerId: freelancer_id,
+      freelancerId: freelancer._id,
       clientId: req.user._id,
       serviceType,
       issueDescription,
-      preferredDate: new Date(preferredDate),
+      preferredDate,
       preferredTime,
+      startTime,
+      endTime,
+      estimatedDurationMinutes,
       address,
-      status: "pending",
     });
 
     res.status(201).json({ success: true, booking });
   } catch (err) {
-    console.error("❌ CREATE BOOKING ERROR:", err);
-    res.status(500).json({ success: false, msg: "Server error." });
+    console.error("CREATE BOOKING ERROR:", err);
+    res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -2405,17 +2447,30 @@ router.post("/", protect, authorize("client"), async (req, res) => {
    ====================================================== */
 router.get("/mybookings", protect, async (req, res) => {
   try {
-    const query =
-      req.user.role === "freelancer"
-        ? { freelancerId: req.user._id }
-        : { clientId: req.user._id };
+    let query = {};
 
-    const bookings = await Booking.find(query).sort({ createdAt: -1 });
+    if (req.user.role === "client") {
+      query.clientId = req.user._id;
+    }
 
-    res.status(200).json({ success: true, data: bookings });
+    if (req.user.role === "freelancer") {
+      const freelancer = await Freelancer.findOne({ user: req.user._id });
+
+      if (!freelancer) {
+        return res.json({ success: true, data: [] });
+      }
+
+      query.freelancerId = freelancer._id;
+    }
+
+    const bookings = await Booking.find(query)
+      .sort({ createdAt: -1 })
+      .populate("clientId", "name email");
+
+    res.json({ success: true, data: bookings });
   } catch (err) {
     console.error("❌ FETCH BOOKINGS ERROR:", err);
-    res.status(500).json({ success: false, msg: "Failed to fetch bookings." });
+    res.status(500).json({ msg: "Failed to fetch bookings." });
   }
 });
 
@@ -2442,7 +2497,12 @@ router.patch(
       }
 
       // Ensure freelancer owns this booking
-      if (booking.freelancerId.toString() !== req.user._id.toString()) {
+      const freelancer = await Freelancer.findOne({ user: req.user._id });
+
+      if (
+        !freelancer ||
+        booking.freelancerId.toString() !== freelancer._id.toString()
+      ) {
         return res.status(403).json({ msg: "Unauthorized action." });
       }
 
@@ -2619,8 +2679,8 @@ const sendAuthCookie = (res, token) => {
   res.cookie("token", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 24 * 60 * 60 * 1000, // 1 day
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 };
 
@@ -3010,12 +3070,17 @@ export default router;
       "name": "pocketlancer-client",
       "version": "1.0.0",
       "dependencies": {
+        "@fullcalendar/daygrid": "^6.1.20",
+        "@fullcalendar/react": "^6.1.20",
+        "autoprefixer": "^10.4.23",
         "axios": "^1.7.9",
         "clsx": "^2.1.1",
+        "leaflet": "^1.9.4",
         "lucide-react": "^0.562.0",
         "next": "16.1.2",
         "react": "19.2.1",
         "react-dom": "19.2.1",
+        "react-leaflet": "^5.0.0",
         "tailwind-merge": "^3.4.0"
       },
       "devDependencies": {
@@ -3479,6 +3544,36 @@ export default router;
       },
       "engines": {
         "node": "^18.18.0 || ^20.9.0 || >=21.1.0"
+      }
+    },
+    "node_modules/@fullcalendar/core": {
+      "version": "6.1.20",
+      "resolved": "https://registry.npmjs.org/@fullcalendar/core/-/core-6.1.20.tgz",
+      "integrity": "sha512-1cukXLlePFiJ8YKXn/4tMKsy0etxYLCkXk8nUCFi11nRONF2Ba2CD5b21/ovtOO2tL6afTJfwmc1ed3HG7eB1g==",
+      "license": "MIT",
+      "peer": true,
+      "dependencies": {
+        "preact": "~10.12.1"
+      }
+    },
+    "node_modules/@fullcalendar/daygrid": {
+      "version": "6.1.20",
+      "resolved": "https://registry.npmjs.org/@fullcalendar/daygrid/-/daygrid-6.1.20.tgz",
+      "integrity": "sha512-AO9vqhkLP77EesmJzuU+IGXgxNulsA8mgQHynclJ8U70vSwAVnbcLG9qftiTAFSlZjiY/NvhE7sflve6cJelyQ==",
+      "license": "MIT",
+      "peerDependencies": {
+        "@fullcalendar/core": "~6.1.20"
+      }
+    },
+    "node_modules/@fullcalendar/react": {
+      "version": "6.1.20",
+      "resolved": "https://registry.npmjs.org/@fullcalendar/react/-/react-6.1.20.tgz",
+      "integrity": "sha512-1w0pZtceaUdfAnxMSCGHCQalhi+mR1jOe76sXzyAXpcPz/Lf0zHSdcGK/U2XpZlnQgQtBZW+d+QBnnzVQKCxAA==",
+      "license": "MIT",
+      "peerDependencies": {
+        "@fullcalendar/core": "~6.1.20",
+        "react": "^16.7.0 || ^17 || ^18 || ^19",
+        "react-dom": "^16.7.0 || ^17 || ^18 || ^19"
       }
     },
     "node_modules/@humanfs/core": {
@@ -4223,6 +4318,17 @@ export default router;
       "license": "MIT",
       "engines": {
         "node": ">=12.4.0"
+      }
+    },
+    "node_modules/@react-leaflet/core": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/@react-leaflet/core/-/core-3.0.0.tgz",
+      "integrity": "sha512-3EWmekh4Nz+pGcr+xjf0KNyYfC3U2JjnkWsh0zcqaexYqmmB5ZhH37kz41JXGmKzpaMZCnPofBBm64i+YrEvGQ==",
+      "license": "Hippocratic-2.1",
+      "peerDependencies": {
+        "leaflet": "^1.9.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
       }
     },
     "node_modules/@rtsao/scc": {
@@ -5426,6 +5532,42 @@ export default router;
       "integrity": "sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==",
       "license": "MIT"
     },
+    "node_modules/autoprefixer": {
+      "version": "10.4.23",
+      "resolved": "https://registry.npmjs.org/autoprefixer/-/autoprefixer-10.4.23.tgz",
+      "integrity": "sha512-YYTXSFulfwytnjAPlw8QHncHJmlvFKtczb8InXaAx9Q0LbfDnfEYDE55omerIJKihhmU61Ft+cAOSzQVaBUmeA==",
+      "funding": [
+        {
+          "type": "opencollective",
+          "url": "https://opencollective.com/postcss/"
+        },
+        {
+          "type": "tidelift",
+          "url": "https://tidelift.com/funding/github/npm/autoprefixer"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/ai"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "browserslist": "^4.28.1",
+        "caniuse-lite": "^1.0.30001760",
+        "fraction.js": "^5.3.4",
+        "picocolors": "^1.1.1",
+        "postcss-value-parser": "^4.2.0"
+      },
+      "bin": {
+        "autoprefixer": "bin/autoprefixer"
+      },
+      "engines": {
+        "node": "^10 || ^12 || >=14"
+      },
+      "peerDependencies": {
+        "postcss": "^8.1.0"
+      }
+    },
     "node_modules/available-typed-arrays": {
       "version": "1.0.7",
       "resolved": "https://registry.npmjs.org/available-typed-arrays/-/available-typed-arrays-1.0.7.tgz",
@@ -5481,9 +5623,9 @@ export default router;
       "license": "MIT"
     },
     "node_modules/baseline-browser-mapping": {
-      "version": "2.8.20",
-      "resolved": "https://registry.npmjs.org/baseline-browser-mapping/-/baseline-browser-mapping-2.8.20.tgz",
-      "integrity": "sha512-JMWsdF+O8Orq3EMukbUN1QfbLK9mX2CkUmQBcW2T0s8OmdAUL5LLM/6wFwSrqXzlXB13yhyK9gTKS1rIizOduQ==",
+      "version": "2.9.15",
+      "resolved": "https://registry.npmjs.org/baseline-browser-mapping/-/baseline-browser-mapping-2.9.15.tgz",
+      "integrity": "sha512-kX8h7K2srmDyYnXRIppo4AH/wYgzWVCs+eKr3RusRSQ5PvRYoEFmR/I0PbdTjKFAoKqp5+kbxnNTFO9jOfSVJg==",
       "license": "Apache-2.0",
       "bin": {
         "baseline-browser-mapping": "dist/cli.js"
@@ -5572,10 +5714,9 @@ export default router;
       }
     },
     "node_modules/browserslist": {
-      "version": "4.27.0",
-      "resolved": "https://registry.npmjs.org/browserslist/-/browserslist-4.27.0.tgz",
-      "integrity": "sha512-AXVQwdhot1eqLihwasPElhX2tAZiBjWdJ9i/Zcj2S6QYIjkx62OKSfnobkriB81C3l4w0rVy3Nt4jaTBltYEpw==",
-      "dev": true,
+      "version": "4.28.1",
+      "resolved": "https://registry.npmjs.org/browserslist/-/browserslist-4.28.1.tgz",
+      "integrity": "sha512-ZC5Bd0LgJXgwGqUknZY/vkUQ04r8NXnJZ3yYi4vDmSiZmC/pdSN0NbNRPxZpbtO4uAfDUAFffO8IZoM3Gj8IkA==",
       "funding": [
         {
           "type": "opencollective",
@@ -5592,11 +5733,11 @@ export default router;
       ],
       "license": "MIT",
       "dependencies": {
-        "baseline-browser-mapping": "^2.8.19",
-        "caniuse-lite": "^1.0.30001751",
-        "electron-to-chromium": "^1.5.238",
-        "node-releases": "^2.0.26",
-        "update-browserslist-db": "^1.1.4"
+        "baseline-browser-mapping": "^2.9.0",
+        "caniuse-lite": "^1.0.30001759",
+        "electron-to-chromium": "^1.5.263",
+        "node-releases": "^2.0.27",
+        "update-browserslist-db": "^1.2.0"
       },
       "bin": {
         "browserslist": "cli.js"
@@ -5688,9 +5829,9 @@ export default router;
       }
     },
     "node_modules/caniuse-lite": {
-      "version": "1.0.30001751",
-      "resolved": "https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001751.tgz",
-      "integrity": "sha512-A0QJhug0Ly64Ii3eIqHu5X51ebln3k4yTUkY1j8drqpWHVreg/VLijN48cZ1bYPiqOQuqpkIKnzr/Ul8V+p6Cw==",
+      "version": "1.0.30001765",
+      "resolved": "https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001765.tgz",
+      "integrity": "sha512-LWcNtSyZrakjECqmpP4qdg0MMGdN368D7X8XvvAqOcqMv0RxnlqVKZl2V6/mBR68oYMxOZPLw/gO7DuisMHUvQ==",
       "funding": [
         {
           "type": "opencollective",
@@ -6121,10 +6262,9 @@ export default router;
       "license": "MIT"
     },
     "node_modules/electron-to-chromium": {
-      "version": "1.5.240",
-      "resolved": "https://registry.npmjs.org/electron-to-chromium/-/electron-to-chromium-1.5.240.tgz",
-      "integrity": "sha512-OBwbZjWgrCOH+g6uJsA2/7Twpas2OlepS9uvByJjR2datRDuKGYeD+nP8lBBks2qnB7bGJNHDUx7c/YLaT3QMQ==",
-      "dev": true,
+      "version": "1.5.267",
+      "resolved": "https://registry.npmjs.org/electron-to-chromium/-/electron-to-chromium-1.5.267.tgz",
+      "integrity": "sha512-0Drusm6MVRXSOJpGbaSVgcQsuB4hEkMpHXaVstcPmhu5LIedxs1xNK/nIxmQIU/RPC0+1/o0AVZfBTkTNJOdUw==",
       "license": "ISC"
     },
     "node_modules/emoji-regex": {
@@ -6334,7 +6474,6 @@ export default router;
       "version": "3.2.0",
       "resolved": "https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz",
       "integrity": "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">=6"
@@ -7096,6 +7235,19 @@ export default router;
       "license": "MIT",
       "engines": {
         "node": ">= 0.6"
+      }
+    },
+    "node_modules/fraction.js": {
+      "version": "5.3.4",
+      "resolved": "https://registry.npmjs.org/fraction.js/-/fraction.js-5.3.4.tgz",
+      "integrity": "sha512-1X1NTtiJphryn/uLQz3whtY6jK3fTqoE3ohKs0tT+Ujr1W59oopxmoEh7Lu5p6vBaPbgoM0bzveAW4Qi5RyWDQ==",
+      "license": "MIT",
+      "engines": {
+        "node": "*"
+      },
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/rawify"
       }
     },
     "node_modules/fresh": {
@@ -8148,6 +8300,12 @@ export default router;
         "node": ">=0.10"
       }
     },
+    "node_modules/leaflet": {
+      "version": "1.9.4",
+      "resolved": "https://registry.npmjs.org/leaflet/-/leaflet-1.9.4.tgz",
+      "integrity": "sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==",
+      "license": "BSD-2-Clause"
+    },
     "node_modules/levn": {
       "version": "0.4.1",
       "resolved": "https://registry.npmjs.org/levn/-/levn-0.4.1.tgz",
@@ -8889,10 +9047,9 @@ export default router;
       }
     },
     "node_modules/node-releases": {
-      "version": "2.0.26",
-      "resolved": "https://registry.npmjs.org/node-releases/-/node-releases-2.0.26.tgz",
-      "integrity": "sha512-S2M9YimhSjBSvYnlr5/+umAnPHE++ODwt5e2Ij6FoX45HA/s4vHdkDx1eax2pAPeAOqu4s9b7ppahsyEFdVqQA==",
-      "dev": true,
+      "version": "2.0.27",
+      "resolved": "https://registry.npmjs.org/node-releases/-/node-releases-2.0.27.tgz",
+      "integrity": "sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA==",
       "license": "MIT"
     },
     "node_modules/nodemon": {
@@ -9254,7 +9411,6 @@ export default router;
       "version": "8.5.6",
       "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.6.tgz",
       "integrity": "sha512-3Ybi1tAuwAP9s0r1UQ2J4n5Y0G05bJkpUIO0/bI9MhwmD70S5aTWbXGBwxHrelT+XM1k6dM0pk+SwNkpTRN7Pg==",
-      "dev": true,
       "funding": [
         {
           "type": "opencollective",
@@ -9277,6 +9433,23 @@ export default router;
       },
       "engines": {
         "node": "^10 || ^12 || >=14"
+      }
+    },
+    "node_modules/postcss-value-parser": {
+      "version": "4.2.0",
+      "resolved": "https://registry.npmjs.org/postcss-value-parser/-/postcss-value-parser-4.2.0.tgz",
+      "integrity": "sha512-1NNCs6uurfkVbeXG4S8JFT9t19m45ICnif8zWLd5oPSZ50QnwMfK+H3jv408d4jw/7Bttv5axS5IiHoLaVNHeQ==",
+      "license": "MIT"
+    },
+    "node_modules/preact": {
+      "version": "10.12.1",
+      "resolved": "https://registry.npmjs.org/preact/-/preact-10.12.1.tgz",
+      "integrity": "sha512-l8386ixSsBdbreOAkqtrwqHwdvR35ID8c3rKPa8lCWuO86dBi32QWHV4vfsZK1utLLFMvw+Z5Ad4XLkZzchscg==",
+      "license": "MIT",
+      "peer": true,
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/preact"
       }
     },
     "node_modules/prelude-ls": {
@@ -9423,6 +9596,20 @@ export default router;
       "integrity": "sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==",
       "dev": true,
       "license": "MIT"
+    },
+    "node_modules/react-leaflet": {
+      "version": "5.0.0",
+      "resolved": "https://registry.npmjs.org/react-leaflet/-/react-leaflet-5.0.0.tgz",
+      "integrity": "sha512-CWbTpr5vcHw5bt9i4zSlPEVQdTVcML390TjeDG0cK59z1ylexpqC6M1PJFjV8jD7CF+ACBFsLIDs6DRMoLEofw==",
+      "license": "Hippocratic-2.1",
+      "dependencies": {
+        "@react-leaflet/core": "^3.0.0"
+      },
+      "peerDependencies": {
+        "leaflet": "^1.9.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
+      }
     },
     "node_modules/readdirp": {
       "version": "3.6.0",
@@ -10583,10 +10770,9 @@ export default router;
       }
     },
     "node_modules/update-browserslist-db": {
-      "version": "1.1.4",
-      "resolved": "https://registry.npmjs.org/update-browserslist-db/-/update-browserslist-db-1.1.4.tgz",
-      "integrity": "sha512-q0SPT4xyU84saUX+tomz1WLkxUbuaJnR1xWt17M7fJtEJigJeWUNGUqrauFXsHnqev9y9JTRGwk13tFBuKby4A==",
-      "dev": true,
+      "version": "1.2.3",
+      "resolved": "https://registry.npmjs.org/update-browserslist-db/-/update-browserslist-db-1.2.3.tgz",
+      "integrity": "sha512-Js0m9cx+qOgDxo0eMiFGEueWztz+d4+M3rGlmKPT+T4IS/jP4ylw3Nwpu6cpTTP8R1MAC1kF4VbdLt3ARf209w==",
       "funding": [
         {
           "type": "opencollective",
@@ -10987,204 +11173,75 @@ export function useUser() {
 
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import MyBookingsPage from "../../components/MyBookingsPage";
+
+export default function Page() {
+  return <MyBookingsPage />;
+}
+
+--- FILE: ./client/app/f/[id]/page.tsx ---
+
+"use client";
+
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import api from "@/services/api";
-import ReviewModal from "@/components/ReviewModal";
-import {
-  Calendar,
-  Clock,
-  Star,
-  Loader2,
-  Briefcase,
-  CheckCircle,
-  XCircle,
-} from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 import { useUser } from "@/context/UserContext";
+console.log("PUBLIC FREELANCER PROFILE PAGE HIT");
 
-interface Booking {
-  _id: string;
-  serviceType: string;
-  preferredDate: string;
-  preferredTime: string;
-  status: "pending" | "confirmed" | "completed" | "cancelled";
-}
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
-
-export default function MyBookingsPage() {
+export default function PublicFreelancerProfile() {
+  const { id } = useParams();
   const router = useRouter();
   const { user } = useUser();
-
-  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [showReview, setShowReview] = useState(false);
-  const [selectedBooking, setSelectedBooking] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchBookings = async () => {
+    const fetchProfile = async () => {
       try {
-        const res = await api.get("/bookings/mybookings");
-        setBookings(res.data.data || []);
-      } catch (err: any) {
-        if (err.response?.status === 401) {
-          router.push("/login");
-        }
+        const res = await api.get(`/freelancers/${id}`);
+        setProfile(res.data.profile);
+      } catch {
+        router.replace("/search");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchBookings();
-  }, [router]);
-
-  const updateStatus = async (
-    bookingId: string,
-    status: "confirmed" | "completed" | "cancelled",
-  ) => {
-    await api.patch(`/bookings/${bookingId}/status`, { status });
-
-    setBookings((prev) =>
-      prev.map((b) => (b._id === bookingId ? { ...b, status } : b)),
-    );
-  };
+    fetchProfile();
+  }, [id, router]);
 
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4 text-slate-500">
-        <Loader2 className="animate-spin text-blue-600" size={40} />
-        <p className="font-medium">Loading your schedule...</p>
-      </div>
-    );
+    return <p className="p-6">Loading…</p>;
   }
 
+  if (!profile) return null;
+
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      <header className="mb-10">
-        <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">
-          My Bookings
-        </h1>
-        <p className="text-slate-500 mt-2">
-          View and manage your service history.
+    <div className="mx-auto max-w-3xl p-6">
+      <div className="rounded-xl border bg-white p-6 shadow-sm">
+        <h1 className="text-3xl font-semibold">{profile.name}</h1>
+
+        <p className="text-slate-600">{profile.title || "Freelancer"}</p>
+
+        <p className="mt-4">{profile.bio || "No bio provided."}</p>
+
+        <p className="mt-4 font-semibold">₹{profile.hourlyRate}/hr</p>
+
+        <p className="mt-2 text-slate-500">
+          📍 {profile.city}, {profile.country}
         </p>
-      </header>
 
-      {bookings.length === 0 ? (
-        <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50">
-          <Briefcase className="mx-auto text-slate-300 mb-4" size={64} />
-          <p className="text-slate-500 text-xl font-medium">
-            No bookings found yet.
-          </p>
-        </div>
-      ) : (
-        <div className="grid gap-6">
-          {bookings.map((b) => (
-            <div
-              key={b._id}
-              className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-all"
-            >
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-blue-50 text-blue-600 p-2.5 rounded-xl">
-                      <Briefcase size={24} />
-                    </div>
-                    <h3 className="font-bold text-xl text-slate-800">
-                      {b.serviceType}
-                    </h3>
-                  </div>
-
-                  <div className="flex flex-wrap gap-5 text-sm font-medium text-slate-500">
-                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg">
-                      <Calendar size={16} />
-                      {new Date(b.preferredDate).toLocaleDateString(undefined, {
-                        dateStyle: "medium",
-                      })}
-                    </div>
-                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg">
-                      <Clock size={16} />
-                      {b.preferredTime}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-col items-end gap-4 w-full md:w-auto">
-                  <span
-                    className={cn(
-                      "px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest border",
-                      b.status === "completed"
-                        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-                        : b.status === "confirmed"
-                          ? "bg-indigo-50 text-indigo-700 border-indigo-100"
-                          : b.status === "cancelled"
-                            ? "bg-red-50 text-red-700 border-red-100"
-                            : "bg-blue-50 text-blue-700 border-blue-100",
-                    )}
-                  >
-                    {b.status}
-                  </span>
-
-                  {/* FREELANCER ACTIONS */}
-                  {user?.role === "freelancer" && b.status === "pending" && (
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => updateStatus(b._id, "confirmed")}
-                        className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white text-sm font-bold rounded-xl hover:bg-emerald-600"
-                      >
-                        <CheckCircle size={18} />
-                        Accept
-                      </button>
-
-                      <button
-                        onClick={() => updateStatus(b._id, "cancelled")}
-                        className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white text-sm font-bold rounded-xl hover:bg-red-600"
-                      >
-                        <XCircle size={18} />
-                        Reject
-                      </button>
-                    </div>
-                  )}
-
-                  {user?.role === "freelancer" && b.status === "confirmed" && (
-                    <button
-                      onClick={() => updateStatus(b._id, "completed")}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl hover:bg-blue-700"
-                    >
-                      <CheckCircle size={18} />
-                      Mark Completed
-                    </button>
-                  )}
-
-                  {/* CLIENT REVIEW */}
-                  {user?.role === "client" && b.status === "completed" && (
-                    <button
-                      onClick={() => {
-                        setSelectedBooking(b._id);
-                        setShowReview(true);
-                      }}
-                      className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 text-white text-sm font-bold rounded-xl hover:bg-amber-600 shadow-lg shadow-amber-100"
-                    >
-                      <Star size={18} fill="currentColor" />
-                      Leave Review
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showReview && selectedBooking && (
-        <ReviewModal
-          bookingId={selectedBooking}
-          onClose={() => setShowReview(false)}
-        />
-      )}
+        {/* CLIENT ACTION */}
+        {user?.role === "client" && (
+          <button
+            onClick={() => router.push(`/book/${id}`)}
+            className="mt-6 rounded bg-brand-primary px-6 py-3 font-semibold text-white hover:bg-blue-600"
+          >
+            Book Freelancer
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -11424,7 +11481,7 @@ function FreelancerDashboard({ router }: { router: any }) {
         </button>
 
         <button
-          onClick={() => router.push("/freelancer/profile")}
+          onClick={() => router.push("/freelancer/profile/")}
           className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
         >
           Edit Profile
@@ -11857,37 +11914,6 @@ export default function RootLayout({
   );
 }
 
---- FILE: ./client/app/switch-role/page.js ---
-
-"use client";
-
-import { useRouter } from "next/navigation";
-import api from "@/services/api";
-
-export default function SwitchRolePage() {
-    const router = useRouter();
-
-    const switchRole = async (role) => {
-        try {
-            await api.post("/auth/switch-role", { role });
-            router.replace(role === "client" ? "/client" : "/freelancer");
-        } catch (err) {
-            console.error("Switch role failed", err);
-        }
-    };
-
-    return (
-        <div className="p-6">
-            <button onClick={() => switchRole("client")}>
-                Switch to Client
-            </button>
-
-            <button onClick={() => switchRole("freelancer")}>
-                Switch to Freelancer
-            </button>
-        </div>
-    );
-}
 --- FILE: ./client/app/book/[freelancerId]/page.tsx ---
 
 "use client";
@@ -12055,101 +12081,21 @@ export default function BookFreelancerPage() {
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
-import L from "leaflet";
-import Link from "next/link";
-import api from "@/services/api";
-import { getCurrentLocation } from "@/utils/geolocation";
-import "leaflet/dist/leaflet.css";
+import dynamic from "next/dynamic";
 
-// Fix default marker icons (Leaflet + Next.js issue)
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+// We import the map component dynamically and disable Server-Side Rendering (SSR)
+// This ensures the map only loads once the code reaches the browser.
+const MapComponent = dynamic(() => import("@/components/MapComponent"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[calc(100vh-4rem)] w-full flex items-center justify-center bg-slate-50">
+      <p className="text-slate-500 animate-pulse">Initializing map engine...</p>
+    </div>
+  ),
 });
 
 export default function MapSearchPage() {
-  const [center, setCenter] = useState<[number, number] | null>(null);
-  const [freelancers, setFreelancers] = useState<any[]>([]);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const loadMapData = async () => {
-      try {
-        const { latitude, longitude } = await getCurrentLocation();
-        setCenter([latitude, longitude]);
-
-        const res = await api.get("/freelancers/search", {
-          params: {
-            latitude,
-            longitude,
-            radiusKm: 10,
-          },
-        });
-
-        setFreelancers(res.data.freelancers);
-      } catch {
-        setError("Unable to load map. Please allow location access.");
-      }
-    };
-
-    loadMapData();
-  }, []);
-
-  if (error) {
-    return <div className="p-6 text-center text-red-600">{error}</div>;
-  }
-
-  if (!center) {
-    return <div className="p-6 text-center">Loading map…</div>;
-  }
-
-  return (
-    <div className="h-[calc(100vh-4rem)] w-full">
-      <MapContainer
-        center={center}
-        zoom={13}
-        scrollWheelZoom
-        className="h-full w-full"
-      >
-        <TileLayer
-          attribution="© OpenStreetMap contributors"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-
-        {/* User location */}
-        <Marker position={center}>
-          <Popup>You are here</Popup>
-        </Marker>
-
-        {/* Freelancer markers */}
-        {freelancers.map((f) => (
-          <Marker
-            key={f._id}
-            position={[f.location.coordinates[1], f.location.coordinates[0]]}
-          >
-            <Popup>
-              <div className="space-y-1">
-                <p className="font-semibold">{f.user?.name}</p>
-                <p className="text-sm">₹{f.hourlyRate}/hr</p>
-                <p className="text-xs text-slate-500">{f.distanceKm} km away</p>
-                <Link
-                  href={`/freelancer/${f._id}`}
-                  className="text-sm text-blue-600 underline"
-                >
-                  View profile
-                </Link>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
-    </div>
-  );
+  return <MapComponent />;
 }
 
 --- FILE: ./client/app/page.tsx ---
@@ -12158,179 +12104,79 @@ export default function MapSearchPage() {
 
 "use client";
 
-import React from 'react';
-import Link from 'next/link';
+import React from "react";
+import Link from "next/link";
 
 const HomePage = () => {
-    // NOTE: Session check logic removed for simplicity here, as the Layout handles auth buttons.
-    // If logged in, you can still redirect them immediately inside a useEffect hook.
-    
-    return (
-        <div className="p-4 md:p-12">
-            
-            {/* 1. Hero Section: Core Value Proposition */}
-            <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-gray-100 rounded-2xl shadow-xl">
-                <h1 className="text-5xl md:text-6xl font-extrabold text-gray-900 mb-6 max-w-4xl">
-                    Connect with <span className="text-blue-600">Local Service Experts</span> Today
-                </h1>
-                <p className="text-xl text-gray-600 mb-10 max-w-3xl">
-                    Find skilled, nearby freelancers for services requiring an on-site presence, all secured with JWT and Multi-Factor Authentication.
-                </p>
-                
-                {/* Primary CTA Button */}
-                <Link href="/search">
-                    <button className="bg-blue-600 text-white py-4 px-10 rounded-full text-xl font-bold hover:bg-blue-700 transition duration-300 shadow-lg">
-                        Start Your Search Now →
-                    </button>
-                </Link>
-            </div>
-            
-            {/* 2. Feature Section: Why PocketLancer? */}
-            <div className="mt-16 text-center">
-                <h2 className="text-4xl font-bold text-gray-800 mb-10">Features Built for Trust and Locality</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    
-                    {/* Feature 1: Location */}
-                    <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
-                        <h3 className="text-2xl font-semibold text-blue-600 mb-3">Geo-Based Matching</h3>
-                        <p className="text-gray-600">Find professionals who are actually close to you, minimizing travel time and hassle. </p>
-                    </div>
-
-                    {/* Feature 2: Security */}
-                    <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
-                        <h3 className="text-2xl font-semibold text-blue-600 mb-3">Secure MFA Login</h3>
-                        <p className="text-gray-600">Authentication protected by JWT and Multi-Factor Authentication (MFA) for maximum data safety.</p>
-                    </div>
-
-                    {/* Feature 3: Booking */}
-                    <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
-                        <h3 className="text-2xl font-semibold text-blue-600 mb-3">Real-Time Booking</h3>
-                        <p className="text-gray-600">View freelancer availability with a built-in calendar and book services instantly.</p>
-                    </div>
-                </div>
-            </div>
-            
-        </div>
-    );
-};
-
-export default HomePage;
---- FILE: ./client/app/client/layout.js ---
-
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import api from "@/services/api";
-
-export default function ClientLayout({ children }) {
-    const router = useRouter();
-
-    useEffect(() => {
-        const checkRole = async () => {
-            const res = await api.get("/auth/check-session");
-            if (res.data.role !== "client") {
-                router.replace("/switch-role");
-            }
-        };
-        checkRole();
-    }, []);
-
-    return (
-        <div>
-            <nav className="p-4 bg-blue-600 text-white">
-                <span>Client Dashboard</span>
-                <button
-                    className="ml-4 underline"
-                    onClick={() => router.push("/switch-role")}
-                >
-                    Switch Role
-                </button>
-            </nav>
-
-            <main className="p-6">{children}</main>
-        </div>
-    );
-}
---- FILE: ./client/app/client/page.js ---
-
-// /client/app/client/page.js
-"use client";
-
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import api from "@/services/api";
-
-const ClientDashboardPage = () => {
-  const router = useRouter();
-  const [stats, setStats] = useState({ open: 0, completed: 0, pending: 0 });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const fetchDashboard = async () => {
-      try {
-        // Fetch dashboard stats from server
-        const res = await api.get("/client/dashboard"); // Correct API route // Make sure this route exists
-        setStats(res.data);
-      } catch (err) {
-        console.error("❌ [DASHBOARD FETCH ERROR]", err);
-
-        // Handle session expiration
-        if (err.response?.status === 401) {
-          alert("Session expired. Please login again.");
-          router.push("/login");
-        } else if (err.response?.status === 404) {
-          setError("Dashboard route not found. Contact admin.");
-        } else {
-          setError("Failed to load dashboard. Please try again later.");
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchDashboard();
-  }, [router]);
-
-  if (loading)
-    return (
-      <p className="text-gray-500 text-center mt-8">Loading dashboard...</p>
-    );
-
-  if (error)
-    return (
-      <p className="text-red-500 text-center mt-8">{error}</p>
-    );
+  // NOTE: Session check logic removed for simplicity here, as the Layout handles auth buttons.
+  // If logged in, you can still redirect them immediately inside a useEffect hook.
 
   return (
-    <div>
-      <h1 className="text-4xl font-bold mb-4">Welcome to Your Client Hub!</h1>
-      <p className="text-gray-600 mb-6">
-        Quickly track your bookings, completed services, and pending payments.
-      </p>
+    <div className="p-4 md:p-12">
+      {/* 1. Hero Section: Core Value Proposition */}
+      <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-gray-100 rounded-2xl shadow-xl">
+        <h1 className="text-5xl md:text-6xl font-extrabold text-gray-900 mb-6 max-w-4xl">
+          Connect with{" "}
+          <span className="text-blue-600">Local Service Experts</span> Today
+        </h1>
+        <p className="text-xl text-gray-600 mb-10 max-w-3xl">
+          Find skilled, nearby freelancers for services requiring an on-site
+          presence, all secured with JWT and Multi-Factor Authentication.
+        </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="p-6 bg-white rounded-lg shadow">
-          <h3 className="text-xl font-bold text-blue-600">Open Bookings</h3>
-          <p className="text-3xl mt-2">{stats.open}</p>
-        </div>
-        <div className="p-6 bg-white rounded-lg shadow">
-          <h3 className="text-xl font-bold text-green-600">Services Completed</h3>
-          <p className="text-3xl mt-2">{stats.completed}</p>
-        </div>
-        <div className="p-6 bg-white rounded-lg shadow">
-          <h3 className="text-xl font-bold text-yellow-600">Pending Payments</h3>
-          <p className="text-3xl mt-2">{stats.pending}</p>
+        {/* Primary CTA Button */}
+        <Link href="/search">
+          <button className="bg-blue-600 text-white py-4 px-10 rounded-full text-xl font-bold hover:bg-blue-700 transition duration-300 shadow-lg">
+            Start Your Search Now →
+          </button>
+        </Link>
+      </div>
+
+      {/* 2. Feature Section: Why PocketLancer? */}
+      <div className="mt-16 text-center">
+        <h2 className="text-4xl font-bold text-gray-800 mb-10">
+          Features Built for Trust and Locality
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          {/* Feature 1: Location */}
+          <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
+            <h3 className="text-2xl font-semibold text-blue-600 mb-3">
+              Geo-Based Matching
+            </h3>
+            <p className="text-gray-600">
+              Find professionals who are actually close to you, minimizing
+              travel time and hassle.{" "}
+            </p>
+          </div>
+
+          {/* Feature 2: Security */}
+          <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
+            <h3 className="text-2xl font-semibold text-blue-600 mb-3">
+              Secure MFA Login
+            </h3>
+            <p className="text-gray-600">
+              Authentication protected by JWT and Multi-Factor Authentication
+              (MFA) for maximum data safety.
+            </p>
+          </div>
+
+          {/* Feature 3: Booking */}
+          <div className="p-6 bg-white rounded-xl shadow-lg border-t-4 border-blue-500">
+            <h3 className="text-2xl font-semibold text-blue-600 mb-3">
+              Real-Time Booking
+            </h3>
+            <p className="text-gray-600">
+              View freelancer availability with a built-in calendar and book
+              services instantly.
+            </p>
+          </div>
         </div>
       </div>
     </div>
   );
 };
 
-export default ClientDashboardPage;
---- FILE: ./client/app/client/bookings/page.js ---
-
+export default HomePage;
 
 --- FILE: ./client/app/globals.css ---
 
@@ -12499,31 +12345,38 @@ export default function LoginPage() {
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useUser } from "@/context/UserContext";
 
 export default function FreelancerLayout({ children }) {
   const { user, loading } = useUser();
   const router = useRouter();
+  const pathname = usePathname();
+
+  const isPublicProfile =
+    pathname.startsWith("/freelancer/") && pathname.split("/").length === 3; // /freelancer/[id]
 
   useEffect(() => {
-    // Wait until auth state is resolved
     if (loading) return;
 
-    // Not logged in
+    // ✅ PUBLIC freelancer profile → allow everyone
+    if (isPublicProfile) return;
+
+    // 🔒 Protected freelancer-only pages
     if (!user) {
       router.replace("/login");
       return;
     }
 
-    // Logged in but wrong role
     if (user.role !== "freelancer") {
-      router.replace("/switch-role");
+      router.replace("/dashboard"); // NOT switch-role
     }
-  }, [user, loading, router]);
+  }, [loading, user, isPublicProfile, router]);
 
-  // Prevent flash of wrong content
-  if (loading || !user || user.role !== "freelancer") {
+  // Prevent flash
+  if (loading) return null;
+
+  if (!isPublicProfile && (!user || user.role !== "freelancer")) {
     return null;
   }
 
@@ -12607,54 +12460,104 @@ import { useRouter } from "next/navigation";
 import ReviewModal from "@/components/ReviewModal";
 
 export default function MyBookingsPage() {
-    const router = useRouter();
-    const [bookings, setBookings] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [showReview, setShowReview] = useState(false);
-    const [selectedBooking, setSelectedBooking] = useState(null);
+  const router = useRouter();
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showReview, setShowReview] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState(null);
 
-    useEffect(() => {
-        api
-            .get("/bookings/mybookings")
-            .then((res) => setBookings(res.data.data))
-            .catch((err) => {
-                if (err.response?.status === 401) router.push("/login");
-            })
-            .finally(() => setLoading(false));
-    }, [router]);
+  const updateStatus = async (id, status) => {
+    try {
+      await api.patch(`/bookings/${id}/status`, { status });
 
-    if (loading) return <p>Loading bookings...</p>;
+      setBookings((prev) =>
+        prev.map((b) => (b._id === id ? { ...b, status } : b)),
+      );
+    } catch (err) {
+      alert(err.response?.data?.msg || "Failed to update booking status");
+    }
+  };
 
-    return (
-        <div className="p-6">
-            <h1 className="text-2xl font-bold mb-4">My Bookings</h1>
+  useEffect(() => {
+    api
+      .get("/bookings/mybookings")
+      .then((res) => setBookings(res.data.data))
+      .catch((err) => {
+        if (err.response?.status === 401) router.push("/login");
+      })
+      .finally(() => setLoading(false));
+  }, [router]);
 
-            {bookings.length === 0 && <p>No bookings found.</p>}
+  if (loading) return <p>Loading bookings...</p>;
 
-            {bookings.map((b) => (
-                <div key={b._id} className="border p-4 mb-3 rounded">
-                    <p><b>Service:</b> {b.serviceType}</p>
-                    <p><b>Date:</b> {new Date(b.preferredDate).toDateString()}</p>
-                    <p><b>Time:</b> {b.preferredTime}</p>
-                    <p><b>Status:</b> {b.status}</p>
+  return (
+    <div className="p-6">
+      <h1 className="text-2xl font-bold mb-4">My Bookings</h1>
 
-                    {/* ⭐ CLIENT REVIEW BUTTON */}
-                    {b.status === "completed" && (
-                        <button
-                            onClick={() => {
-                                setSelectedBooking(b._id);
-                                setShowReview(true);
-                            }}
-                            className="mt-3 px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
-                        >
-                            Leave Review
-                        </button>
-                    )}
-                </div>
-            ))}
+      {bookings.length === 0 && <p>No bookings found.</p>}
+
+      {bookings.map((b) => (
+        <div key={b._id} className="border p-4 mb-3 rounded">
+          <p>
+            <b>Service:</b> {b.serviceType}
+          </p>
+
+          <p>
+            <b>Client:</b> {b.clientId?.name}
+          </p>
+
+          <p>
+            <b>Date:</b> {new Date(b.startTime).toDateString()}
+          </p>
+
+          <p>
+            <b>Time:</b> {new Date(b.startTime).toLocaleTimeString()} –{" "}
+            {new Date(b.endTime).toLocaleTimeString()}
+          </p>
+
+          <p>
+            <b>Duration:</b> {b.estimatedDurationMinutes} mins
+          </p>
+
+          <p>
+            <b>Status:</b> <span className="font-semibold">{b.status}</span>
+          </p>
+
+          {b.status === "pending" && (
+            <div className="mt-3 flex gap-3">
+              <button
+                onClick={() => updateStatus(b._id, "confirmed")}
+                className="px-4 py-2 bg-green-600 text-white rounded"
+              >
+                Accept
+              </button>
+
+              <button
+                onClick={() => updateStatus(b._id, "cancelled")}
+                className="px-4 py-2 bg-red-600 text-white rounded"
+              >
+                Reject
+              </button>
+            </div>
+          )}
+
+          {b.status === "completed" && (
+            <button
+              onClick={() => {
+                setSelectedBooking(b._id);
+                setShowReview(true);
+              }}
+              className="mt-3 px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
+            >
+              Leave Review
+            </button>
+          )}
         </div>
-    );
+      ))}
+    </div>
+  );
 }
+
 --- FILE: ./client/app/freelancer/profile/page.tsx ---
 
 "use client";
@@ -12668,92 +12571,159 @@ import { getCurrentLocation, reverseGeocode } from "@/utils/geolocation";
 export default function FreelancerProfilePage() {
   const { user, loading } = useUser();
   const router = useRouter();
+  const [isEditing, setIsEditing] = useState(false);
+  const [originalProfile, setOriginalProfile] = useState<typeof profile | null>(
+    null,
+  );
 
-  const [profile, setProfile] = useState<any>(null);
+  const [profile, setProfile] = useState<{
+    title: string;
+    bio: string;
+    skills: string[];
+    hourlyRate: number;
+    latitude: number | null;
+    longitude: number | null;
+    city: string;
+    country: string;
+  } | null>(null);
+
   const [saving, setSaving] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<
+    "idle" | "fetching" | "ready" | "error"
+  >("idle");
   const [error, setError] = useState("");
 
-  // 🔐 Role protection ONLY
+  /* ----------------------------------------
+     AUTH + ROLE GUARD (NO SIDE EFFECTS)
+  ----------------------------------------- */
   useEffect(() => {
-    if (!loading && user?.role !== "freelancer") {
+    if (!loading && (!user || user.role !== "freelancer")) {
       router.replace("/dashboard");
     }
   }, [loading, user, router]);
 
-  // Load existing profile
+  /* ----------------------------------------
+     LOAD PROFILE (OR INIT EMPTY)
+  ----------------------------------------- */
   useEffect(() => {
-    if (user?.role === "freelancer") {
-      api
-        .get("/freelancers/me")
-        .then((res) => setProfile(res.data.profile))
-        .catch(() =>
-          setProfile({
-            title: "",
-            bio: "",
-            skills: [],
-            hourlyRate: 0,
-            latitude: null,
-            longitude: null,
-            city: "",
-            country: "",
-          }),
-        );
-    }
+    if (user?.role !== "freelancer") return;
+
+    api
+      .get("/freelancers/me")
+      .then((res) => {
+        setProfile(res.data.profile);
+        setLocationStatus("ready");
+      })
+      .catch(() => {
+        setProfile({
+          title: "",
+          bio: "",
+          skills: [],
+          hourlyRate: 0,
+          latitude: null,
+          longitude: null,
+          city: "",
+          country: "",
+        });
+      });
   }, [user]);
 
+  /* ----------------------------------------
+     LOCATION FETCH
+  ----------------------------------------- */
   const fetchLocation = async () => {
     try {
+      setLocationStatus("fetching");
+      setError("");
+
       const { latitude, longitude } = await getCurrentLocation();
       const { city, country } = await reverseGeocode(latitude, longitude);
 
-      setProfile({
-        ...profile,
-        latitude,
-        longitude,
-        city,
-        country,
-      });
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              latitude,
+              longitude,
+              city,
+              country,
+            }
+          : prev,
+      );
+
+      setLocationStatus("ready");
     } catch {
-      setError("Location permission required.");
+      setLocationStatus("error");
+      setError("Location permission is required to continue.");
     }
   };
 
+  /* ----------------------------------------
+     SAVE PROFILE
+  ----------------------------------------- */
   const saveProfile = async () => {
-    if (!profile.latitude || !profile.longitude) {
-      setError("Please allow location access.");
+    if (!profile) return;
+
+    if (profile.latitude == null || profile.longitude == null) {
+      setError("Please allow location access before saving.");
       return;
     }
 
     setSaving(true);
+    setError("");
+
     try {
       await api.put("/freelancers/me", profile);
       router.push("/dashboard");
     } catch {
-      setError("Failed to save profile.");
+      setError("Failed to save profile. Please try again.");
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading || !profile) return <p className="p-6">Loading…</p>;
+  /* ----------------------------------------
+     RENDER STATES
+  ----------------------------------------- */
+  if (loading || !profile) {
+    return <p className="p-6">Loading profile…</p>;
+  }
 
   return (
     <div className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-6 text-3xl font-semibold">Freelancer Profile</h1>
+      <h1 className="mb-6 text-3xl font-semibold text-slate-900">
+        Freelancer Profile
+      </h1>
 
-      <button
-        onClick={fetchLocation}
-        className="mb-4 rounded bg-brand-primary px-4 py-2 text-white"
-      >
-        Use my current location
-      </button>
+      {/* LOCATION */}
+      <div className="mb-6 rounded-xl border bg-white p-4">
+        <h2 className="mb-2 font-semibold">Location (Required)</h2>
 
-      {error && <p className="mb-4 text-red-600">{error}</p>}
+        {locationStatus !== "ready" && (
+          <button
+            onClick={fetchLocation}
+            className="rounded bg-brand-primary px-4 py-2 font-semibold text-white"
+          >
+            {locationStatus === "fetching"
+              ? "Fetching location…"
+              : "Use my current location"}
+          </button>
+        )}
 
+        {locationStatus === "ready" && (
+          <p className="text-slate-700">
+            📍 {profile.city}, {profile.country}
+          </p>
+        )}
+
+        {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      </div>
+
+      {/* PROFILE FORM */}
       <div className="space-y-4 rounded-xl bg-white p-6 shadow">
         <input
           className="w-full rounded border p-2"
-          placeholder="Title"
+          placeholder="Professional title"
           value={profile.title}
           onChange={(e) => setProfile({ ...profile, title: e.target.value })}
         />
@@ -12773,7 +12743,10 @@ export default function FreelancerProfilePage() {
           onChange={(e) =>
             setProfile({
               ...profile,
-              skills: e.target.value.split(",").map((s) => s.trim()),
+              skills: e.target.value
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean),
             })
           }
         />
@@ -12784,14 +12757,17 @@ export default function FreelancerProfilePage() {
           placeholder="Hourly rate"
           value={profile.hourlyRate}
           onChange={(e) =>
-            setProfile({ ...profile, hourlyRate: Number(e.target.value) })
+            setProfile({
+              ...profile,
+              hourlyRate: Number(e.target.value),
+            })
           }
         />
 
         <button
           onClick={saveProfile}
           disabled={saving}
-          className="rounded bg-brand-primary px-4 py-2 text-white"
+          className="rounded bg-brand-primary px-4 py-2 font-semibold text-white disabled:opacity-60"
         >
           {saving ? "Saving…" : "Save Profile"}
         </button>
@@ -12808,6 +12784,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
+console.log("PUBLIC FREELANCER PROFILE PAGE HIT");
 
 export default function PublicFreelancerProfile() {
   const { id } = useParams();
@@ -13091,6 +13068,250 @@ export default function ReviewModal({ bookingId, onClose }) {
     </div>
   );
 }
+--- FILE: ./client/components/FreelancerCalendar.tsx ---
+
+"use client";
+
+import FullCalendar from "@fullcalendar/react";
+import dayGridPlugin from "@fullcalendar/daygrid";
+
+interface Booking {
+  _id: string;
+  serviceType: string;
+  status: string;
+  preferredDate: string;
+}
+
+export default function FreelancerCalendar({
+  bookings,
+}: {
+  bookings: Booking[];
+}) {
+  const events = bookings.map((b) => ({
+    title: `${b.serviceType} (${b.status})`,
+    date: b.preferredDate,
+  }));
+
+  return (
+    <div className="rounded-xl bg-white p-4 shadow">
+      <FullCalendar
+        plugins={[dayGridPlugin]}
+        initialView="dayGridMonth"
+        events={events}
+        height="auto"
+      />
+    </div>
+  );
+}
+
+--- FILE: ./client/components/MyBookingsPage.tsx ---
+
+"use client";
+
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import api from "@/services/api";
+import ReviewModal from "@/components/ReviewModal";
+import {
+  Calendar,
+  Clock,
+  Star,
+  Loader2,
+  Briefcase,
+  CheckCircle,
+  XCircle,
+} from "lucide-react";
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+import { useUser } from "@/context/UserContext";
+
+interface Booking {
+  _id: string;
+  serviceType: string;
+  preferredDate: string;
+  preferredTime: string;
+  status: "pending" | "confirmed" | "completed" | "cancelled";
+}
+
+// Keep this named 'cn'
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+// Ensure this is the ONLY 'MyBookingsPage' declaration in the file
+export default function MyBookingsPage() {
+  const router = useRouter();
+  const { user } = useUser();
+
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showReview, setShowReview] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchBookings = async () => {
+      try {
+        const res = await api.get("/bookings/mybookings");
+        setBookings(res.data.data || []);
+      } catch (err: any) {
+        if (err.response?.status === 401) {
+          router.push("/login");
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBookings();
+  }, [router]);
+
+  const updateStatus = async (
+    bookingId: string,
+    status: "confirmed" | "completed" | "cancelled",
+  ) => {
+    await api.patch(`/bookings/${bookingId}/status`, { status });
+
+    setBookings((prev) =>
+      prev.map((b) => (b._id === bookingId ? { ...b, status } : b)),
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4 text-slate-500">
+        <Loader2 className="animate-spin text-blue-600" size={40} />
+        <p className="font-medium">Loading your schedule...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto p-6">
+      <header className="mb-10">
+        <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">
+          My Bookings
+        </h1>
+        <p className="text-slate-500 mt-2">
+          View and manage your service history.
+        </p>
+      </header>
+
+      {bookings.length === 0 ? (
+        <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50">
+          <Briefcase className="mx-auto text-slate-300 mb-4" size={64} />
+          <p className="text-slate-500 text-xl font-medium">
+            No bookings found yet.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-6">
+          {bookings.map((b) => (
+            <div
+              key={b._id}
+              className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-all"
+            >
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-blue-50 text-blue-600 p-2.5 rounded-xl">
+                      <Briefcase size={24} />
+                    </div>
+                    <h3 className="font-bold text-xl text-slate-800">
+                      {b.serviceType}
+                    </h3>
+                  </div>
+
+                  <div className="flex flex-wrap gap-5 text-sm font-medium text-slate-500">
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg">
+                      <Calendar size={16} />
+                      {new Date(b.preferredDate).toLocaleDateString(undefined, {
+                        dateStyle: "medium",
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg">
+                      <Clock size={16} />
+                      {b.preferredTime}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-end gap-4 w-full md:w-auto">
+                  <span
+                    className={cn(
+                      "px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest border",
+                      b.status === "completed"
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                        : b.status === "confirmed"
+                          ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+                          : b.status === "cancelled"
+                            ? "bg-red-50 text-red-700 border-red-100"
+                            : "bg-blue-50 text-blue-700 border-blue-100",
+                    )}
+                  >
+                    {b.status}
+                  </span>
+
+                  {/* FREELANCER ACTIONS */}
+                  {user?.role === "freelancer" && b.status === "pending" && (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => updateStatus(b._id, "confirmed")}
+                        className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white text-sm font-bold rounded-xl hover:bg-emerald-600"
+                      >
+                        <CheckCircle size={18} />
+                        Accept
+                      </button>
+
+                      <button
+                        onClick={() => updateStatus(b._id, "cancelled")}
+                        className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white text-sm font-bold rounded-xl hover:bg-red-600"
+                      >
+                        <XCircle size={18} />
+                        Reject
+                      </button>
+                    </div>
+                  )}
+
+                  {user?.role === "freelancer" && b.status === "confirmed" && (
+                    <button
+                      onClick={() => updateStatus(b._id, "completed")}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl hover:bg-blue-700"
+                    >
+                      <CheckCircle size={18} />
+                      Mark Completed
+                    </button>
+                  )}
+
+                  {/* CLIENT REVIEW */}
+                  {user?.role === "client" && b.status === "completed" && (
+                    <button
+                      onClick={() => {
+                        setSelectedBooking(b._id);
+                        setShowReview(true);
+                      }}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 text-white text-sm font-bold rounded-xl hover:bg-amber-600 shadow-lg shadow-amber-100"
+                    >
+                      <Star size={18} fill="currentColor" />
+                      Leave Review
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showReview && selectedBooking && (
+        <ReviewModal
+          bookingId={selectedBooking}
+          onClose={() => setShowReview(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 --- FILE: ./client/components/Footer.tsx ---
 
 import Link from "next/link";
@@ -13112,13 +13333,114 @@ export default function Footer() {
         </footer>
     );
 }
+--- FILE: ./client/components/MapComponent.tsx ---
+
+"use client";
+
+import { useEffect, useState } from "react";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+import Link from "next/link";
+import api from "@/services/api";
+import { getCurrentLocation } from "@/utils/geolocation";
+import "leaflet/dist/leaflet.css";
+
+// Fix default marker icons (Leaflet + Next.js issue)
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
+
+export default function MapSearchPage() {
+  const [center, setCenter] = useState<[number, number] | null>(null);
+  const [freelancers, setFreelancers] = useState<any[]>([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const loadMapData = async () => {
+      try {
+        const { latitude, longitude } = await getCurrentLocation();
+        setCenter([latitude, longitude]);
+
+        const res = await api.get("/freelancers/search", {
+          params: {
+            latitude,
+            longitude,
+            radiusKm: 10,
+          },
+        });
+
+        setFreelancers(res.data.freelancers);
+      } catch {
+        setError("Unable to load map. Please allow location access.");
+      }
+    };
+
+    loadMapData();
+  }, []);
+
+  if (error) {
+    return <div className="p-6 text-center text-red-600">{error}</div>;
+  }
+
+  if (!center) {
+    return <div className="p-6 text-center">Loading map…</div>;
+  }
+
+  return (
+    <div className="h-[calc(100vh-4rem)] w-full">
+      <MapContainer
+        center={center}
+        zoom={13}
+        scrollWheelZoom
+        className="h-full w-full"
+      >
+        <TileLayer
+          attribution="© OpenStreetMap contributors"
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
+        {/* User location */}
+        <Marker position={center}>
+          <Popup>You are here</Popup>
+        </Marker>
+
+        {/* Freelancer markers */}
+        {freelancers.map((f) => (
+          <Marker
+            key={f._id}
+            position={[f.location.coordinates[1], f.location.coordinates[0]]}
+          >
+            <Popup>
+              <div className="space-y-1">
+                <p className="font-semibold">{f.user?.name}</p>
+                <p className="text-sm">₹{f.hourlyRate}/hr</p>
+                <p className="text-xs text-slate-500">{f.distanceKm} km away</p>
+                <Link
+                  href={`/freelancer/${f._id}`}
+                  className="text-sm text-blue-600 underline"
+                >
+                  View profile
+                </Link>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
+      </MapContainer>
+    </div>
+  );
+}
+
 --- FILE: ./client/components/Header.tsx ---
 
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
 import { LogOut, User as UserIcon, ChevronDown, Repeat } from "lucide-react";
@@ -13128,6 +13450,8 @@ export default function Header() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const pathname = usePathname();
+  const isOnDashboard = pathname === "/dashboard";
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -13166,9 +13490,11 @@ export default function Header() {
   const goToProfile = () => {
     setOpen(false);
 
-    router.push(
-      user?.role === "freelancer" ? "/freelancer/profile" : "/client/profile",
-    );
+    if (user?.role === "freelancer") {
+      router.push("/freelancer/profile/");
+    } else {
+      router.push("/dashboard");
+    }
   };
 
   return (
@@ -13200,43 +13526,62 @@ export default function Header() {
 
         {/* Logged IN */}
         {user && (
-          <div className="relative" ref={menuRef}>
-            <button
-              onClick={() => setOpen(!open)}
-              className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              <UserIcon size={16} />
-              {user.name}
-              <ChevronDown size={16} />
-            </button>
-
-            {open && (
-              <div className="absolute right-0 mt-2 w-48 rounded-xl border bg-white shadow-lg overflow-hidden z-50">
-                <button
-                  onClick={goToProfile}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-slate-50"
-                >
-                  <UserIcon size={16} />
-                  My Profile
-                </button>
-
-                <button
-                  onClick={handleSwitchRole}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-slate-50"
-                >
-                  <Repeat size={16} />
-                  Switch Role
-                </button>
-
-                <button
-                  onClick={handleLogout}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50"
-                >
-                  <LogOut size={16} />
-                  Sign Out
-                </button>
-              </div>
+          <div className="flex items-center gap-4">
+            {/* DASHBOARD CTA (hidden on dashboard page) */}
+            {!isOnDashboard && (
+              <button
+                onClick={() => router.push("/dashboard")}
+                className="relative overflow-hidden rounded-xl bg-brand-primary px-5 py-2.5 text-sm font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+              >
+                <span className="absolute inset-0 bg-gradient-to-r from-blue-500 to-indigo-600 opacity-0 transition-opacity hover:opacity-100" />
+                <span className="relative">
+                  Go to{" "}
+                  {user.role === "client"
+                    ? "Client Dashboard"
+                    : "Freelancer Dashboard"}
+                </span>
+              </button>
             )}
+
+            {/* ACCOUNT DROPDOWN */}
+            <div className="relative" ref={menuRef}>
+              <button
+                onClick={() => setOpen(!open)}
+                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <UserIcon size={16} />
+                {user.name}
+                <ChevronDown size={16} />
+              </button>
+
+              {open && (
+                <div className="absolute right-0 mt-2 w-48 rounded-xl border bg-white shadow-lg overflow-hidden z-50">
+                  <button
+                    onClick={goToProfile}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-slate-50"
+                  >
+                    <UserIcon size={16} />
+                    My Profile
+                  </button>
+
+                  <button
+                    onClick={handleSwitchRole}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-slate-50"
+                  >
+                    <Repeat size={16} />
+                    Switch Role
+                  </button>
+
+                  <button
+                    onClick={handleLogout}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50"
+                  >
+                    <LogOut size={16} />
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -13254,44 +13599,27 @@ export default function FreelancerCard({ freelancer }: { freelancer: any }) {
   const router = useRouter();
 
   return (
-    <div className="rounded-xl border bg-white p-4 shadow-sm transition hover:shadow-md">
-      {/* Header */}
+    <div className="rounded-xl border bg-white p-4 shadow-sm hover:shadow-md transition">
       <h2 className="text-lg font-semibold">{freelancer.user?.name}</h2>
 
       <p className="text-sm text-slate-600">
         {freelancer.title || "Freelancer"}
       </p>
 
-      <p className="mt-2 text-sm text-slate-500">
-        📍 {freelancer.city} · <strong>{freelancer.distanceKm} km away</strong>
+      <p className="text-sm text-slate-500 mt-1">
+        📍 {freelancer.city} · {freelancer.distanceKm} km away
       </p>
 
-      {/* Skills */}
-      {freelancer.skills?.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {freelancer.skills.slice(0, 5).map((skill: string) => (
-            <span
-              key={skill}
-              className="rounded bg-slate-100 px-2 py-1 text-xs font-medium"
-            >
-              {skill}
-            </span>
-          ))}
-        </div>
-      )}
+      <p className="mt-2 font-medium">₹{freelancer.hourlyRate}/hr</p>
 
-      {/* Rate */}
-      <p className="mt-3 text-sm font-semibold">₹{freelancer.hourlyRate}/hr</p>
-
-      {/* CTA */}
-      <div className="mt-4">
-        <button
-          onClick={() => router.push(`/freelancer/${freelancer._id}`)}
-          className="w-full rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
-        >
-          View Profile
-        </button>
-      </div>
+      {/* ✅ VIEW PROFILE BUTTON */}
+      <button
+        // ✅ CORRECT
+        onClick={() => router.push(`/freelancer/${freelancer._id}`)}
+        className="mt-4 w-full rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
+      >
+        View Profile
+      </button>
     </div>
   );
 }
@@ -20089,12 +20417,17 @@ export default function BookingModal({ freelancer, onClose }) {
     "lint": "eslint ."
   },
   "dependencies": {
+    "@fullcalendar/daygrid": "^6.1.20",
+    "@fullcalendar/react": "^6.1.20",
+    "autoprefixer": "^10.4.23",
     "axios": "^1.7.9",
     "clsx": "^2.1.1",
+    "leaflet": "^1.9.4",
     "lucide-react": "^0.562.0",
     "next": "16.1.2",
     "react": "19.2.1",
     "react-dom": "19.2.1",
+    "react-leaflet": "^5.0.0",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
@@ -20167,7 +20500,7 @@ import axios, { AxiosInstance, AxiosError } from "axios";
  */
 
 const api: AxiosInstance = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api",
+  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5001/api",
   withCredentials: true, // REQUIRED for httpOnly cookies
   headers: {
     "Content-Type": "application/json",
@@ -20207,7 +20540,10 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: "http://localhost:5001/api/:path*",
+        destination:
+          process.env.NODE_ENV === "production"
+            ? "https://pocketlancer.onrender.com/api/:path*"
+            : "http://localhost:5001/api/:path*",
       },
     ];
   },

@@ -7,6 +7,20 @@ import { SERVICE_DURATIONS } from "../constants/serviceDurations.js";
 const router = express.Router();
 
 /* ======================================================
+   ✅ HELPER: Get Service Duration
+   ====================================================== */
+const getServiceDuration = (serviceType) => {
+  // fallback duration: 60 minutes
+  if (!serviceType) return 60;
+
+  // If constant is like { plumbing: 60, electrician: 45 }
+  const duration = SERVICE_DURATIONS?.[serviceType];
+
+  // if not found, return 60 mins
+  return typeof duration === "number" ? duration : 60;
+};
+
+/* ======================================================
    1️⃣ CREATE BOOKING (CLIENT)
    ====================================================== */
 router.post("/", protect, authorize("client"), async (req, res) => {
@@ -20,6 +34,13 @@ router.post("/", protect, authorize("client"), async (req, res) => {
   } = req.body;
 
   try {
+    // ✅ Basic validation
+    if (!freelancer_id || !serviceType || !preferredDate || !preferredTime) {
+      return res.status(400).json({
+        msg: "Missing required fields: freelancer_id, serviceType, preferredDate, preferredTime",
+      });
+    }
+
     const freelancer = await Freelancer.findById(freelancer_id);
     if (!freelancer) {
       return res.status(404).json({ msg: "Freelancer not found" });
@@ -30,6 +51,12 @@ router.post("/", protect, authorize("client"), async (req, res) => {
 
     // ✅ 2. Build start & end time
     const startTime = new Date(`${preferredDate}T${preferredTime}`);
+    if (isNaN(startTime.getTime())) {
+      return res
+        .status(400)
+        .json({ msg: "Invalid preferredDate or preferredTime format." });
+    }
+
     const endTime = new Date(
       startTime.getTime() + estimatedDurationMinutes * 60000,
     );
@@ -38,12 +65,8 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     const conflict = await Booking.findOne({
       freelancerId: freelancer._id,
       status: { $in: ["pending", "confirmed"] },
-      $or: [
-        {
-          startTime: { $lt: endTime },
-          endTime: { $gt: startTime },
-        },
-      ],
+      startTime: { $lt: endTime },
+      endTime: { $gt: startTime },
     });
 
     if (conflict) {
@@ -66,10 +89,10 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       address,
     });
 
-    res.status(201).json({ success: true, booking });
+    return res.status(201).json({ success: true, booking });
   } catch (err) {
     console.error("CREATE BOOKING ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -78,7 +101,7 @@ router.post("/", protect, authorize("client"), async (req, res) => {
    ====================================================== */
 router.get("/mybookings", protect, async (req, res) => {
   try {
-    let query = {};
+    const query = {};
 
     if (req.user.role === "client") {
       query.clientId = req.user._id;
@@ -98,10 +121,10 @@ router.get("/mybookings", protect, async (req, res) => {
       .sort({ createdAt: -1 })
       .populate("clientId", "name email");
 
-    res.json({ success: true, data: bookings });
+    return res.json({ success: true, data: bookings });
   } catch (err) {
     console.error("❌ FETCH BOOKINGS ERROR:", err);
-    res.status(500).json({ msg: "Failed to fetch bookings." });
+    return res.status(500).json({ msg: "Failed to fetch bookings." });
   }
 });
 
@@ -122,35 +145,43 @@ router.patch(
 
     try {
       const booking = await Booking.findById(id);
-
       if (!booking) {
         return res.status(404).json({ msg: "Booking not found." });
       }
 
       // Ensure freelancer owns this booking
       const freelancer = await Freelancer.findOne({ user: req.user._id });
+      if (!freelancer) {
+        return res.status(403).json({ msg: "Freelancer profile not found." });
+      }
 
-      if (
-        !freelancer ||
-        booking.freelancerId.toString() !== freelancer._id.toString()
-      ) {
+      if (!booking.freelancerId) {
+        return res
+          .status(400)
+          .json({ msg: "Booking has no freelancer assigned." });
+      }
+
+      if (booking.freelancerId.toString() !== freelancer._id.toString()) {
         return res.status(403).json({ msg: "Unauthorized action." });
       }
 
-      // Prevent illegal transitions
       if (booking.status === "cancelled") {
         return res
           .status(400)
           .json({ msg: "Cancelled bookings cannot be updated." });
       }
 
-      booking.status = status;
-      await booking.save();
+      // ✅ Update ONLY status (avoid .save() validation issue)
+      const updated = await Booking.findByIdAndUpdate(
+        id,
+        { $set: { status } },
+        { new: true },
+      );
 
-      res.status(200).json({ success: true, booking });
+      return res.status(200).json({ success: true, booking: updated });
     } catch (err) {
       console.error("❌ UPDATE STATUS ERROR:", err);
-      res.status(500).json({ msg: "Failed to update booking status." });
+      return res.status(500).json({ msg: "Failed to update booking status." });
     }
   },
 );

@@ -93,7 +93,7 @@ function FreelancerDashboard({ router }: { router: any }) {
         </button>
 
         <button
-          onClick={() => router.push("/freelancer/profile/edit")}
+          onClick={() => router.push("/freelancer/profile/")}
           className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
         >
           Edit Profile

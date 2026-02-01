@@ -19,12 +19,13 @@ export function getCurrentLocation(): Promise<{
         });
       },
       (error) => {
+        console.log("Geo error:", error.code, error.message);
         reject(error);
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
+        timeout: 60000,
+        maximumAge: 60000,
       },
     );
   });
