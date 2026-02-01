@@ -4,6 +4,8 @@ import "./globals.css";
 import Providers from "./providers";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import HeaderWrapper from "@/components/HeaderWrapper";
+import ThemeInit from "@/components/ThemeInit";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,11 +30,15 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen bg-gray-50 text-gray-900`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100`}
       >
         <Providers>
-          <Header />
+          {/* ✅ Show Header only on non-dashboard routes */}
+          <HeaderWrapper />
+          <ThemeInit />
           <main className="flex-grow">{children}</main>
+
+          {/* ✅ Optional: hide footer on dashboard too */}
           <Footer />
         </Providers>
       </body>

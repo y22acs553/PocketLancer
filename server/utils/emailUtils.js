@@ -48,3 +48,28 @@ export async function sendReviewEmail(to, rating, comment) {
     return false;
   }
 }
+export async function sendPasswordResetEmail(to, resetUrl) {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: `PocketLancer <${process.env.EMAIL_FROM}>`,
+      to: [to],
+      subject: "Reset your PocketLancer password",
+      html: `
+        <h2>Password Reset</h2>
+        <p>You requested to reset your password.</p>
+        <p>This link will expire in 15 minutes.</p>
+        <a href="${resetUrl}">${resetUrl}</a>
+      `,
+    });
+
+    if (error) {
+      console.error("❌ Resend reset email error:", error.message);
+      return false;
+    }
+
+    return !!data?.id;
+  } catch (err) {
+    console.error("❌ sendPasswordResetEmail error:", err.message);
+    return false;
+  }
+}

@@ -3,13 +3,18 @@
 
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: [],
+  darkMode: "class",
+  content: [
+    "./app/**/*.{js,ts,jsx,tsx}",
+    "./pages/**/*.{js,ts,jsx,tsx}",
+    "./components/**/*.{js,ts,jsx,tsx}",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
   theme: {
     extend: {},
   },
   plugins: [],
-}
-
+};
 
 --- FILE: ./server/middleware/auth.js ---
 
@@ -90,6 +95,23 @@ export const authorize = (...allowedRoles) => {
   };
 };
 
+--- FILE: ./server/config/cloudinary.js ---
+
+import { v2 as cloudinary } from "cloudinary";
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+console.log("Cloudinary:", {
+  cloud: process.env.CLOUDINARY_CLOUD_NAME,
+  keyExists: !!process.env.CLOUDINARY_API_KEY,
+  secretExists: !!process.env.CLOUDINARY_API_SECRET,
+});
+
+export default cloudinary;
+
 --- FILE: ./server/constants/serviceDurations.js ---
 
 export const SERVICE_DURATIONS = {
@@ -155,6 +177,31 @@ export async function sendReviewEmail(to, rating, comment) {
     });
     return true;
   } catch (error) {
+    return false;
+  }
+}
+export async function sendPasswordResetEmail(to, resetUrl) {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: `PocketLancer <${process.env.EMAIL_FROM}>`,
+      to: [to],
+      subject: "Reset your PocketLancer password",
+      html: `
+        <h2>Password Reset</h2>
+        <p>You requested to reset your password.</p>
+        <p>This link will expire in 15 minutes.</p>
+        <a href="${resetUrl}">${resetUrl}</a>
+      `,
+    });
+
+    if (error) {
+      console.error("❌ Resend reset email error:", error.message);
+      return false;
+    }
+
+    return !!data?.id;
+  } catch (err) {
+    console.error("❌ sendPasswordResetEmail error:", err.message);
     return false;
   }
 }
@@ -229,6 +276,9 @@ const BookingSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    preferredDate: { type: String, required: true },
+    preferredTime: { type: String, required: true },
+    serviceType: { type: String, required: true },
 
     address: {
       type: String,
@@ -320,6 +370,7 @@ import bcrypt from "bcryptjs";
 const UserSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
+
     email: {
       type: String,
       required: true,
@@ -327,11 +378,17 @@ const UserSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
+
     password: {
       type: String,
       required: true,
       select: false,
     },
+
+    // ✅ Forgot password fields
+    passwordResetToken: { type: String },
+    passwordResetExpires: { type: Date },
+
     role: {
       type: String,
       enum: ["client", "freelancer"],
@@ -341,14 +398,13 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-// Explicit password hashing
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Hash password ONLY when explicitly set
 UserSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
+
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
   next();
@@ -414,6 +470,7 @@ const FreelancerSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    profilePic: { type: String, default: "" },
 
     hourlyRate: {
       type: Number,
@@ -424,7 +481,7 @@ const FreelancerSchema = new mongoose.Schema(
     // 🔴 GEO LOCATION (CORE FEATURE)
     location: {
       type: GeoPointSchema,
-      required: true,
+      required: false,
     },
 
     // Stored for UX / display only
@@ -2318,12 +2375,14 @@ export default Freelancer;
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.9.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.9.5",
+    "multer": "^2.0.2",
     "resend": "^6.7.0"
   },
   "devDependencies": {
@@ -2376,6 +2435,25 @@ import { SERVICE_DURATIONS } from "../constants/serviceDurations.js";
 const router = express.Router();
 
 /* ======================================================
+   ✅ HELPER: Get Service Duration
+   ====================================================== */
+
+function getServiceDuration(serviceType) {
+  if (!serviceType) return 60;
+
+  const key = serviceType.trim().toLowerCase();
+
+  // SERVICE_DURATIONS should be something like:
+  // { plumbing: 60, electrician: 45, ... }
+  if (SERVICE_DURATIONS && SERVICE_DURATIONS[key]) {
+    return SERVICE_DURATIONS[key];
+  }
+
+  // default fallback
+  return 60;
+}
+
+/* ======================================================
    1️⃣ CREATE BOOKING (CLIENT)
    ====================================================== */
 router.post("/", protect, authorize("client"), async (req, res) => {
@@ -2389,6 +2467,13 @@ router.post("/", protect, authorize("client"), async (req, res) => {
   } = req.body;
 
   try {
+    // ✅ Basic validation
+    if (!freelancer_id || !serviceType || !preferredDate || !preferredTime) {
+      return res.status(400).json({
+        msg: "Missing required fields: freelancer_id, serviceType, preferredDate, preferredTime",
+      });
+    }
+
     const freelancer = await Freelancer.findById(freelancer_id);
     if (!freelancer) {
       return res.status(404).json({ msg: "Freelancer not found" });
@@ -2399,6 +2484,12 @@ router.post("/", protect, authorize("client"), async (req, res) => {
 
     // ✅ 2. Build start & end time
     const startTime = new Date(`${preferredDate}T${preferredTime}`);
+    if (isNaN(startTime.getTime())) {
+      return res
+        .status(400)
+        .json({ msg: "Invalid preferredDate or preferredTime format." });
+    }
+
     const endTime = new Date(
       startTime.getTime() + estimatedDurationMinutes * 60000,
     );
@@ -2407,12 +2498,8 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     const conflict = await Booking.findOne({
       freelancerId: freelancer._id,
       status: { $in: ["pending", "confirmed"] },
-      $or: [
-        {
-          startTime: { $lt: endTime },
-          endTime: { $gt: startTime },
-        },
-      ],
+      startTime: { $lt: endTime },
+      endTime: { $gt: startTime },
     });
 
     if (conflict) {
@@ -2435,10 +2522,10 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       address,
     });
 
-    res.status(201).json({ success: true, booking });
+    return res.status(201).json({ success: true, booking });
   } catch (err) {
     console.error("CREATE BOOKING ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -2447,7 +2534,7 @@ router.post("/", protect, authorize("client"), async (req, res) => {
    ====================================================== */
 router.get("/mybookings", protect, async (req, res) => {
   try {
-    let query = {};
+    const query = {};
 
     if (req.user.role === "client") {
       query.clientId = req.user._id;
@@ -2467,10 +2554,10 @@ router.get("/mybookings", protect, async (req, res) => {
       .sort({ createdAt: -1 })
       .populate("clientId", "name email");
 
-    res.json({ success: true, data: bookings });
+    return res.json({ success: true, data: bookings });
   } catch (err) {
     console.error("❌ FETCH BOOKINGS ERROR:", err);
-    res.status(500).json({ msg: "Failed to fetch bookings." });
+    return res.status(500).json({ msg: "Failed to fetch bookings." });
   }
 });
 
@@ -2491,35 +2578,43 @@ router.patch(
 
     try {
       const booking = await Booking.findById(id);
-
       if (!booking) {
         return res.status(404).json({ msg: "Booking not found." });
       }
 
       // Ensure freelancer owns this booking
       const freelancer = await Freelancer.findOne({ user: req.user._id });
+      if (!freelancer) {
+        return res.status(403).json({ msg: "Freelancer profile not found." });
+      }
 
-      if (
-        !freelancer ||
-        booking.freelancerId.toString() !== freelancer._id.toString()
-      ) {
+      if (!booking.freelancerId) {
+        return res
+          .status(400)
+          .json({ msg: "Booking has no freelancer assigned." });
+      }
+
+      if (booking.freelancerId.toString() !== freelancer._id.toString()) {
         return res.status(403).json({ msg: "Unauthorized action." });
       }
 
-      // Prevent illegal transitions
       if (booking.status === "cancelled") {
         return res
           .status(400)
           .json({ msg: "Cancelled bookings cannot be updated." });
       }
 
-      booking.status = status;
-      await booking.save();
+      // ✅ Update ONLY status (avoid .save() validation issue)
+      const updated = await Booking.findByIdAndUpdate(
+        id,
+        { $set: { status } },
+        { new: true },
+      );
 
-      res.status(200).json({ success: true, booking });
+      return res.status(200).json({ success: true, booking: updated });
     } catch (err) {
       console.error("❌ UPDATE STATUS ERROR:", err);
-      res.status(500).json({ msg: "Failed to update booking status." });
+      return res.status(500).json({ msg: "Failed to update booking status." });
     }
   },
 );
@@ -2659,6 +2754,8 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import { protect } from "../middleware/auth.js";
+import crypto from "crypto";
+import { sendPasswordResetEmail } from "../utils/emailUtils.js";
 
 const router = express.Router();
 
@@ -2706,6 +2803,20 @@ router.post("/register", async (req, res) => {
       password,
       role: role === "freelancer" ? "freelancer" : "client",
     });
+    if (user.role === "freelancer") {
+      const existing = await Freelancer.findOne({ user: user._id });
+
+      if (!existing) {
+        await Freelancer.create({
+          user: user._id,
+          name: user.name,
+          email: user.email,
+          profilePic: "",
+          rating: 0,
+          ratingCount: 0,
+        });
+      }
+    }
 
     await user.save();
 
@@ -2833,6 +2944,71 @@ router.post("/switch-role", protect, async (req, res) => {
     res.status(500).json({ msg: "Failed to switch role" });
   }
 });
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+
+    // ✅ Always return same message
+    if (!user) {
+      return res.json({
+        success: true,
+        msg: "If email exists, reset link sent.",
+      });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const hashed = crypto.createHash("sha256").update(resetToken).digest("hex");
+
+    user.passwordResetToken = hashed;
+    user.passwordResetExpires = Date.now() + 15 * 60 * 1000;
+    await user.save();
+
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
+
+    await sendPasswordResetEmail(user.email, resetUrl);
+
+    return res.json({
+      success: true,
+      msg: "If email exists, reset link sent.",
+    });
+  } catch (err) {
+    console.error("FORGOT PASSWORD ERROR:", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+});
+router.post("/reset-password", async (req, res) => {
+  const { token, password } = req.body;
+
+  try {
+    if (!token || !password) {
+      return res.status(400).json({ msg: "Token and password required." });
+    }
+
+    const hashed = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await User.findOne({
+      passwordResetToken: hashed,
+      passwordResetExpires: { $gt: Date.now() },
+    }).select("+password");
+
+    if (!user) {
+      return res.status(400).json({ msg: "Invalid or expired token." });
+    }
+
+    user.password = password; // ✅ will be hashed by pre-save hook
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+
+    await user.save();
+
+    return res.json({ success: true, msg: "Password reset successful." });
+  } catch (err) {
+    console.error("RESET PASSWORD ERROR:", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+});
 
 export default router;
 
@@ -2852,6 +3028,7 @@ const router = express.Router();
 function isValidCoordinates(latitude, longitude) {
   if (typeof latitude !== "number" || typeof longitude !== "number")
     return false;
+  if (Number.isNaN(latitude) || Number.isNaN(longitude)) return false;
   if (latitude < -90 || latitude > 90) return false;
   if (longitude < -180 || longitude > 180) return false;
   if (latitude === 0 && longitude === 0) return false;
@@ -2864,16 +3041,27 @@ function isValidCoordinates(latitude, longitude) {
 
 router.get("/me", protect, authorize("freelancer"), async (req, res) => {
   try {
-    const profile = await Freelancer.findOne({ user: req.user._id });
+    let profile = await Freelancer.findOne({ user: req.user._id });
+
+    // ✅ auto-create minimal profile (no location yet)
     if (!profile) {
-      return res.status(404).json({
-        msg: "Freelancer profile not created yet",
+      profile = await Freelancer.create({
+        user: req.user._id,
+        title: "",
+        bio: "",
+        skills: [],
+        profilePic: "",
+        hourlyRate: 0,
+        city: "",
+        country: "",
+        // location intentionally not set here
       });
     }
-    res.json({ success: true, profile });
+
+    return res.json({ success: true, profile });
   } catch (err) {
     console.error("❌ GET /me ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -2888,8 +3076,12 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       longitude,
       city,
       country,
+      profilePic,
+      portfolio,
+      pastWorks,
     } = req.body;
 
+    // ✅ enforce location mandatory when saving profile
     if (!isValidCoordinates(latitude, longitude)) {
       return res.status(400).json({
         msg: "Valid GPS location is required",
@@ -2905,6 +3097,9 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
         hourlyRate,
         city,
         country,
+        profilePic,
+        portfolio,
+        pastWorks,
         location: {
           type: "Point",
           coordinates: [longitude, latitude],
@@ -2913,15 +3108,15 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       { new: true, upsert: true },
     );
 
-    res.json({ success: true, profile });
+    return res.json({ success: true, profile });
   } catch (err) {
     console.error("❌ UPDATE PROFILE ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
 /* =====================================================
-   GEO + SKILLS SEARCH (SELF EXCLUDED – FINAL FIX)
+   GEO + SKILLS SEARCH (SELF EXCLUDED)
    ===================================================== */
 
 router.get("/search", protect, async (req, res) => {
@@ -2943,8 +3138,10 @@ router.get("/search", protect, async (req, res) => {
       });
     }
 
+    // ✅ Only show freelancers who have real location
     const geoQuery = {
-      "location.coordinates": { $ne: [0, 0] },
+      "location.coordinates.0": { $exists: true },
+      "location.coordinates.1": { $exists: true },
     };
 
     if (skillsQuery.length > 0) {
@@ -2982,6 +3179,7 @@ router.get("/search", protect, async (req, res) => {
           hourlyRate: 1,
           city: 1,
           country: 1,
+          profilePic: 1,
           distanceKm: {
             $round: [{ $divide: ["$distanceMeters", 1000] }, 2],
           },
@@ -2991,15 +3189,15 @@ router.get("/search", protect, async (req, res) => {
       },
     ]);
 
-    // ✅ FINAL FILTER (SAFE & RELIABLE)
+    // ✅ exclude self
     const filtered = freelancers.filter(
       (f) => f.userId.toString() !== req.user._id.toString(),
     );
 
-    res.json({ success: true, freelancers: filtered });
+    return res.json({ success: true, freelancers: filtered });
   } catch (err) {
     console.error("❌ GEO SEARCH ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -3040,13 +3238,102 @@ router.get("/:id", async (req, res) => {
         hourlyRate: profile.hourlyRate,
         city: profile.city,
         country: profile.country,
+        profilePic: profile.profilePic || "",
+        portfolio: profile.portfolio || [],
+        pastWorks: profile.pastWorks || [],
       },
     });
   } catch (err) {
     console.error("❌ PUBLIC PROFILE ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
+
+export default router;
+
+--- FILE: ./server/routes/uploads.js ---
+
+import express from "express";
+import multer from "multer";
+import cloudinary from "../config/cloudinary.js";
+import { protect, authorize } from "../middleware/auth.js";
+import Freelancer from "../models/Freelancer.js";
+
+const router = express.Router();
+
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // ✅ 2MB limit
+});
+
+router.post(
+  "/profile-pic",
+  protect,
+  authorize("freelancer"),
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ msg: "No file uploaded" });
+      }
+
+      // ✅ Find freelancer in a flexible way
+      const freelancer =
+        (await Freelancer.findOne({ user: req.user._id })) ||
+        (await Freelancer.findOne({ userId: req.user._id })) ||
+        (await Freelancer.findOne({ email: req.user.email }));
+
+      if (!freelancer) {
+        return res.status(404).json({
+          msg: "Freelancer profile not found. Create freelancer profile first.",
+        });
+      }
+
+      // ✅ Convert buffer to base64
+      const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
+        "base64",
+      )}`;
+
+      const result = await cloudinary.uploader.upload(base64, {
+        folder: "pocketlancer/profile-pics",
+        transformation: [
+          { width: 400, height: 400, crop: "fill", gravity: "face" },
+        ],
+      });
+
+      freelancer.profilePic = result.secure_url;
+      await freelancer.save();
+
+      return res.json({ success: true, profilePic: freelancer.profilePic });
+    } catch (err) {
+      console.error("UPLOAD PROFILE PIC ERROR:", err);
+      return res.status(500).json({ msg: "Upload failed" });
+    }
+  },
+);
+router.delete(
+  "/profile-pic",
+  protect,
+  authorize("freelancer"),
+  async (req, res) => {
+    try {
+      const freelancer = await Freelancer.findOne({ user: req.user._id });
+
+      if (!freelancer) {
+        return res.status(404).json({ msg: "Freelancer profile not found" });
+      }
+
+      freelancer.profilePic = "";
+      await freelancer.save();
+
+      return res.json({ success: true, msg: "Profile picture removed" });
+    } catch (err) {
+      console.error("REMOVE PROFILE PIC ERROR:", err);
+      return res.status(500).json({ msg: "Failed to remove profile picture" });
+    }
+  },
+);
 
 export default router;
 
@@ -5326,6 +5613,12 @@ export default router;
         "node": ">= 8"
       }
     },
+    "node_modules/append-field": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/append-field/-/append-field-1.0.0.tgz",
+      "integrity": "sha512-klpgFSWLW1ZEs8svjfb7g4qWY0YS5imI82dTg+QahUvJ8YqAY0P10Uk8tTyh9ZGuYEZEMaeJYCF5BFuX552hsw==",
+      "license": "MIT"
+    },
     "node_modules/argparse": {
       "version": "2.0.1",
       "resolved": "https://registry.npmjs.org/argparse/-/argparse-2.0.1.tgz",
@@ -5761,6 +6054,23 @@ export default router;
       "integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",
       "license": "BSD-3-Clause"
     },
+    "node_modules/buffer-from": {
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/buffer-from/-/buffer-from-1.1.2.tgz",
+      "integrity": "sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==",
+      "license": "MIT"
+    },
+    "node_modules/busboy": {
+      "version": "1.6.0",
+      "resolved": "https://registry.npmjs.org/busboy/-/busboy-1.6.0.tgz",
+      "integrity": "sha512-8SFQbg/0hQ9xy3UNTB0YEnsNBbWfhf7RtnzpL7TkBiTBRfrQ9Fxcnz7VJsleJpyp6rVLvXiuORqjlHi5q+PYuA==",
+      "dependencies": {
+        "streamsearch": "^1.1.0"
+      },
+      "engines": {
+        "node": ">=10.16.0"
+      }
+    },
     "node_modules/bytes": {
       "version": "3.1.2",
       "resolved": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz",
@@ -5909,6 +6219,18 @@ export default router;
       "integrity": "sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==",
       "license": "MIT"
     },
+    "node_modules/cloudinary": {
+      "version": "2.9.0",
+      "resolved": "https://registry.npmjs.org/cloudinary/-/cloudinary-2.9.0.tgz",
+      "integrity": "sha512-F3iKMOy4y0zy0bi5JBp94SC7HY7i/ImfTPSUV07iJmRzH1Iz8WavFfOlJTR1zvYM/xKGoiGZ3my/zy64In0IQQ==",
+      "license": "MIT",
+      "dependencies": {
+        "lodash": "^4.17.21"
+      },
+      "engines": {
+        "node": ">=9"
+      }
+    },
     "node_modules/clsx": {
       "version": "2.1.1",
       "resolved": "https://registry.npmjs.org/clsx/-/clsx-2.1.1.tgz",
@@ -5956,6 +6278,21 @@ export default router;
       "integrity": "sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==",
       "dev": true,
       "license": "MIT"
+    },
+    "node_modules/concat-stream": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/concat-stream/-/concat-stream-2.0.0.tgz",
+      "integrity": "sha512-MWufYdFw53ccGjCA+Ol7XJYpAlW6/prSMzuPOTRnJGcGzuhLn4Scrz7qf6o8bROZ514ltazcIFJZevcfbo0x7A==",
+      "engines": [
+        "node >= 6.0"
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "buffer-from": "^1.0.0",
+        "inherits": "^2.0.3",
+        "readable-stream": "^3.0.2",
+        "typedarray": "^0.0.6"
+      }
     },
     "node_modules/content-disposition": {
       "version": "0.5.4",
@@ -8597,6 +8934,12 @@ export default router;
         "url": "https://github.com/sponsors/sindresorhus"
       }
     },
+    "node_modules/lodash": {
+      "version": "4.17.23",
+      "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz",
+      "integrity": "sha512-LgVTMpQtIopCi79SJeDiP0TfWi5CNEc/L/aRdTh3yIvmZXTnheWpKjSZhnvMl8iXbC1tFg9gdHHDMLoV7CnG+w==",
+      "license": "MIT"
+    },
     "node_modules/lodash.includes": {
       "version": "4.3.0",
       "resolved": "https://registry.npmjs.org/lodash.includes/-/lodash.includes-4.3.0.tgz",
@@ -8804,10 +9147,21 @@ export default router;
       "version": "1.2.8",
       "resolved": "https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz",
       "integrity": "sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==",
-      "dev": true,
       "license": "MIT",
       "funding": {
         "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/mkdirp": {
+      "version": "0.5.6",
+      "resolved": "https://registry.npmjs.org/mkdirp/-/mkdirp-0.5.6.tgz",
+      "integrity": "sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw==",
+      "license": "MIT",
+      "dependencies": {
+        "minimist": "^1.2.6"
+      },
+      "bin": {
+        "mkdirp": "bin/cmd.js"
       }
     },
     "node_modules/mongodb": {
@@ -8914,6 +9268,24 @@ export default router;
       "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
       "license": "MIT"
+    },
+    "node_modules/multer": {
+      "version": "2.0.2",
+      "resolved": "https://registry.npmjs.org/multer/-/multer-2.0.2.tgz",
+      "integrity": "sha512-u7f2xaZ/UG8oLXHvtF/oWTRvT44p9ecwBBqTwgJVq0+4BW1g8OW01TyMEGWBHbyMOYVHXslaut7qEQ1meATXgw==",
+      "license": "MIT",
+      "dependencies": {
+        "append-field": "^1.0.0",
+        "busboy": "^1.6.0",
+        "concat-stream": "^2.0.0",
+        "mkdirp": "^0.5.6",
+        "object-assign": "^4.1.1",
+        "type-is": "^1.6.18",
+        "xtend": "^4.0.2"
+      },
+      "engines": {
+        "node": ">= 10.16.0"
+      }
     },
     "node_modules/nanoid": {
       "version": "3.3.11",
@@ -9611,6 +9983,20 @@ export default router;
         "react-dom": "^19.0.0"
       }
     },
+    "node_modules/readable-stream": {
+      "version": "3.6.2",
+      "resolved": "https://registry.npmjs.org/readable-stream/-/readable-stream-3.6.2.tgz",
+      "integrity": "sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==",
+      "license": "MIT",
+      "dependencies": {
+        "inherits": "^2.0.3",
+        "string_decoder": "^1.1.1",
+        "util-deprecate": "^1.0.1"
+      },
+      "engines": {
+        "node": ">= 6"
+      }
+    },
     "node_modules/readdirp": {
       "version": "3.6.0",
       "resolved": "https://registry.npmjs.org/readdirp/-/readdirp-3.6.0.tgz",
@@ -10187,6 +10573,23 @@ export default router;
         "node": ">= 0.4"
       }
     },
+    "node_modules/streamsearch": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/streamsearch/-/streamsearch-1.1.0.tgz",
+      "integrity": "sha512-Mcc5wHehp9aXz1ax6bZUyY5afg9u2rv5cqQI3mRrYkGC8rW2hM02jWuwjtL++LS5qinSyhj2QfLyNsuc+VsExg==",
+      "engines": {
+        "node": ">=10.0.0"
+      }
+    },
+    "node_modules/string_decoder": {
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.3.0.tgz",
+      "integrity": "sha512-hkRX8U1WjJFd8LsDJ2yQ/wWWxaopEsABU1XfkM8A+j0+85JAGppt16cr1Whg6KIbb4okU6Mql6BOj+uup/wKeA==",
+      "license": "MIT",
+      "dependencies": {
+        "safe-buffer": "~5.2.0"
+      }
+    },
     "node_modules/string.prototype.includes": {
       "version": "2.0.1",
       "resolved": "https://registry.npmjs.org/string.prototype.includes/-/string.prototype.includes-2.0.1.tgz",
@@ -10654,6 +11057,12 @@ export default router;
         "url": "https://github.com/sponsors/ljharb"
       }
     },
+    "node_modules/typedarray": {
+      "version": "0.0.6",
+      "resolved": "https://registry.npmjs.org/typedarray/-/typedarray-0.0.6.tgz",
+      "integrity": "sha512-/aCDEGatGvZ2BIk+HmLf4ifCJFwvKFNb9/JeZPMulfgFracn9QFcAf5GO8B/mweUjSoblS5In0cWhqpfs/5PQA==",
+      "license": "MIT"
+    },
     "node_modules/typescript": {
       "version": "5.9.3",
       "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
@@ -10808,6 +11217,12 @@ export default router;
       "dependencies": {
         "punycode": "^2.1.0"
       }
+    },
+    "node_modules/util-deprecate": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz",
+      "integrity": "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==",
+      "license": "MIT"
     },
     "node_modules/utils-merge": {
       "version": "1.0.1",
@@ -10977,6 +11392,15 @@ export default router;
         "node": ">=0.10.0"
       }
     },
+    "node_modules/xtend": {
+      "version": "4.0.2",
+      "resolved": "https://registry.npmjs.org/xtend/-/xtend-4.0.2.tgz",
+      "integrity": "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.4"
+      }
+    },
     "node_modules/yallist": {
       "version": "3.1.1",
       "resolved": "https://registry.npmjs.org/yallist/-/yallist-3.1.1.tgz",
@@ -11025,12 +11449,14 @@ export default router;
       "version": "1.0.0",
       "dependencies": {
         "bcryptjs": "^2.4.3",
+        "cloudinary": "^2.9.0",
         "cookie-parser": "^1.4.7",
         "cors": "^2.8.5",
         "dotenv": "^16.4.7",
         "express": "^4.21.2",
         "jsonwebtoken": "^9.0.2",
         "mongoose": "^8.9.5",
+        "multer": "^2.0.2",
         "resend": "^6.7.0"
       },
       "devDependencies": {
@@ -11082,6 +11508,7 @@ export interface User {
 
 /** @type {import('tailwindcss').Config} */
 const config = {
+  darkMode: "class", // ✅ REQUIRED
   content: [
     "./app/**/*.{js,ts,jsx,tsx}",
     "./components/**/*.{js,ts,jsx,tsx}",
@@ -11173,74 +11600,630 @@ export function useUser() {
 
 "use client";
 
-import MyBookingsPage from "../../components/MyBookingsPage";
+import React, { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import api from "@/services/api";
+import ReviewModal from "@/components/ReviewModal";
+import { useUser } from "@/context/UserContext";
+import {
+  Calendar,
+  Clock,
+  Star,
+  Loader2,
+  Briefcase,
+  CheckCircle,
+  XCircle,
+  BadgeCheck,
+} from "lucide-react";
 
-export default function Page() {
-  return <MyBookingsPage />;
+type BookingStatus = "pending" | "confirmed" | "completed" | "cancelled";
+
+interface Booking {
+  _id: string;
+  serviceType: string;
+  preferredDate: string;
+  preferredTime: string;
+  status: BookingStatus;
+}
+
+function statusBadge(status: BookingStatus) {
+  switch (status) {
+    case "completed":
+      return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100";
+    case "confirmed":
+      return "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100";
+    case "cancelled":
+      return "bg-red-50 text-red-700 ring-1 ring-red-100";
+    default:
+      return "bg-blue-50 text-blue-700 ring-1 ring-blue-100";
+  }
+}
+
+export default function MyBookingsPage() {
+  const router = useRouter();
+  const { user } = useUser();
+
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [showReview, setShowReview] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<string | null>(null);
+
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [toast, setToast] = useState("");
+
+  const stats = useMemo(() => {
+    return {
+      pending: bookings.filter((b) => b.status === "pending").length,
+      confirmed: bookings.filter((b) => b.status === "confirmed").length,
+      completed: bookings.filter((b) => b.status === "completed").length,
+    };
+  }, [bookings]);
+
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(""), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    const fetchBookings = async () => {
+      try {
+        const res = await api.get("/bookings/mybookings");
+        setBookings(res.data.data || []);
+      } catch (err: any) {
+        if (err.response?.status === 401) router.push("/login");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBookings();
+  }, [router]);
+
+  const updateStatus = async (
+    bookingId: string,
+    status: "confirmed" | "completed" | "cancelled",
+  ) => {
+    try {
+      setActionLoading(`${bookingId}:${status}`);
+
+      await api.patch(`/bookings/${bookingId}/status`, { status });
+
+      setBookings((prev) =>
+        prev.map((b) => (b._id === bookingId ? { ...b, status } : b)),
+      );
+
+      setToast(`Booking updated → ${status}`);
+    } catch (err: any) {
+      setToast(err?.response?.data?.msg || "Failed to update booking status");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-slate-500">
+        <Loader2 className="animate-spin text-blue-600" size={44} />
+        <p className="font-bold">Loading your bookings…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-6 right-6 z-50 rounded-2xl bg-slate-900 px-5 py-3 text-white font-extrabold shadow-lg">
+          {toast}
+        </div>
+      )}
+
+      {/* Header */}
+      <header className="rounded-3xl bg-gradient-to-r from-slate-900 to-slate-700 p-8 text-white shadow">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+          <div>
+            <h1 className="text-4xl font-extrabold tracking-tight">
+              My Bookings
+            </h1>
+            <p className="text-slate-200 mt-2 font-semibold">
+              Manage pending requests, confirmed jobs and completed history.
+            </p>
+          </div>
+
+          {/* Stats badges */}
+          <div className="flex flex-wrap gap-3">
+            <span className="rounded-full bg-white/10 px-4 py-2 text-sm font-extrabold">
+              Pending: {stats.pending}
+            </span>
+            <span className="rounded-full bg-white/10 px-4 py-2 text-sm font-extrabold">
+              Confirmed: {stats.confirmed}
+            </span>
+            <span className="rounded-full bg-white/10 px-4 py-2 text-sm font-extrabold">
+              Completed: {stats.completed}
+            </span>
+          </div>
+        </div>
+      </header>
+
+      {/* Empty state */}
+      {bookings.length === 0 ? (
+        <div className="text-center py-20 ring-1 ring-black/5 rounded-3xl bg-white shadow-sm">
+          <Briefcase className="mx-auto text-slate-200 mb-4" size={70} />
+          <p className="text-slate-700 text-xl font-extrabold">
+            No bookings yet.
+          </p>
+          <p className="text-slate-500 mt-2 font-semibold">
+            Once someone books you, it will appear here.
+          </p>
+
+          <button
+            onClick={() =>
+              router.push(
+                user?.role === "freelancer" ? "/freelancer/profile" : "/search",
+              )
+            }
+            className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-6 py-3 text-white font-extrabold hover:bg-blue-700"
+          >
+            <BadgeCheck size={18} />
+            {user?.role === "freelancer"
+              ? "Complete my profile"
+              : "Find freelancers"}
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-5">
+          {bookings.map((b) => (
+            <div
+              key={b._id}
+              className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all"
+            >
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                {/* Info */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-blue-50 text-blue-600 p-3 rounded-2xl">
+                      <Briefcase size={24} />
+                    </div>
+                    <h3 className="font-extrabold text-2xl text-slate-900">
+                      {b.serviceType}
+                    </h3>
+                  </div>
+
+                  <div className="flex flex-wrap gap-4 text-sm font-bold text-slate-600">
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl">
+                      <Calendar size={16} />
+                      {new Date(b.preferredDate).toLocaleDateString(undefined, {
+                        dateStyle: "medium",
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl">
+                      <Clock size={16} />
+                      {b.preferredTime}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col items-end gap-4 w-full md:w-auto">
+                  <span
+                    className={`px-4 py-2 rounded-full text-xs font-extrabold uppercase tracking-widest ${statusBadge(
+                      b.status,
+                    )}`}
+                  >
+                    {b.status}
+                  </span>
+
+                  {/* Freelancer Actions */}
+                  {user?.role === "freelancer" && b.status === "pending" && (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => updateStatus(b._id, "confirmed")}
+                        disabled={actionLoading === `${b._id}:confirmed`}
+                        className="flex items-center gap-2 px-5 py-3 bg-emerald-600 text-white text-sm font-extrabold rounded-2xl hover:bg-emerald-700 disabled:opacity-60"
+                      >
+                        {actionLoading === `${b._id}:confirmed` ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <CheckCircle size={18} />
+                        )}
+                        Accept
+                      </button>
+
+                      <button
+                        onClick={() => updateStatus(b._id, "cancelled")}
+                        disabled={actionLoading === `${b._id}:cancelled`}
+                        className="flex items-center gap-2 px-5 py-3 bg-red-600 text-white text-sm font-extrabold rounded-2xl hover:bg-red-700 disabled:opacity-60"
+                      >
+                        {actionLoading === `${b._id}:cancelled` ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <XCircle size={18} />
+                        )}
+                        Reject
+                      </button>
+                    </div>
+                  )}
+
+                  {user?.role === "freelancer" && b.status === "confirmed" && (
+                    <button
+                      onClick={() => updateStatus(b._id, "completed")}
+                      disabled={actionLoading === `${b._id}:completed`}
+                      className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white text-sm font-extrabold rounded-2xl hover:bg-blue-700 disabled:opacity-60"
+                    >
+                      {actionLoading === `${b._id}:completed` ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <CheckCircle size={18} />
+                      )}
+                      Mark Completed
+                    </button>
+                  )}
+
+                  {/* Client Review */}
+                  {user?.role === "client" && b.status === "completed" && (
+                    <button
+                      onClick={() => {
+                        setSelectedBooking(b._id);
+                        setShowReview(true);
+                      }}
+                      className="flex items-center gap-2 px-6 py-3 bg-amber-500 text-white text-sm font-extrabold rounded-2xl hover:bg-amber-600 shadow-lg shadow-amber-100"
+                    >
+                      <Star size={18} fill="currentColor" />
+                      Leave Review
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Review Modal */}
+      {showReview && selectedBooking && (
+        <ReviewModal
+          bookingId={selectedBooking}
+          onClose={() => setShowReview(false)}
+        />
+      )}
+    </div>
+  );
 }
 
 --- FILE: ./client/app/f/[id]/page.tsx ---
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import api from "@/services/api";
-import { useUser } from "@/context/UserContext";
-console.log("PUBLIC FREELANCER PROFILE PAGE HIT");
+import Image from "next/image";
+import {
+  MapPin,
+  Star,
+  Briefcase,
+  Loader2,
+  Link as LinkIcon,
+} from "lucide-react";
 
-export default function PublicFreelancerProfile() {
-  const { id } = useParams();
+type Review = {
+  _id: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+  clientName?: string;
+};
+
+type PastWork = {
+  title: string;
+  description: string;
+  link?: string;
+  year?: string;
+};
+
+type Profile = {
+  id: string;
+  name: string;
+  title: string;
+  bio: string;
+  skills: string[];
+  hourlyRate: number;
+  city: string;
+  country: string;
+  profilePic?: string;
+  portfolio?: string[];
+  pastWorks?: PastWork[];
+};
+
+export default function PublicFreelancerProfilePage() {
+  const params = useParams();
   const router = useRouter();
-  const { user } = useUser();
-  const [profile, setProfile] = useState<any>(null);
+  const id = params?.id as string;
+
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingReviews, setLoadingReviews] = useState(true);
+
+  const cardClass =
+    "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all";
+
+  const ratingSummary = useMemo(() => {
+    if (!reviews.length) return { avg: 0, count: 0 };
+    const avg =
+      reviews.reduce((a, r) => a + (r.rating || 0), 0) / reviews.length;
+    return { avg: Number(avg.toFixed(1)), count: reviews.length };
+  }, [reviews]);
 
   useEffect(() => {
-    const fetchProfile = async () => {
+    const load = async () => {
       try {
+        setLoading(true);
         const res = await api.get(`/freelancers/${id}`);
         setProfile(res.data.profile);
       } catch {
-        router.replace("/search");
+        router.push("/");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchProfile();
+    if (id) load();
   }, [id, router]);
 
-  if (loading) {
-    return <p className="p-6">Loading…</p>;
+  useEffect(() => {
+    const loadReviews = async () => {
+      try {
+        if (!id) return;
+        setLoadingReviews(true);
+        const res = await api.get(`/reviews/freelancer/${id}`);
+        setReviews(res.data?.data || []);
+      } catch {
+        setReviews([]);
+      } finally {
+        setLoadingReviews(false);
+      }
+    };
+
+    loadReviews();
+  }, [id]);
+
+  if (loading || !profile) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center gap-3 text-slate-600">
+        <Loader2 className="animate-spin" />
+        Loading freelancer profile…
+      </div>
+    );
   }
 
-  if (!profile) return null;
-
   return (
-    <div className="mx-auto max-w-3xl p-6">
-      <div className="rounded-xl border bg-white p-6 shadow-sm">
-        <h1 className="text-3xl font-semibold">{profile.name}</h1>
+    <div className="mx-auto max-w-7xl p-6">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
+          {profile.name}
+        </h1>
+        <p className="text-slate-500 mt-2">Freelancer profile</p>
+      </div>
 
-        <p className="text-slate-600">{profile.title || "Freelancer"}</p>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* LEFT 80% */}
+        <div className="lg:col-span-9 space-y-6">
+          {/* Identity Card */}
+          <div className={cardClass}>
+            <div className="flex flex-col md:flex-row md:items-center gap-6">
+              <div className="relative h-36 w-36 overflow-hidden rounded-3xl bg-slate-50 ring-1 ring-black/10 flex items-center justify-center">
+                {profile.profilePic ? (
+                  <Image
+                    src={profile.profilePic}
+                    alt="Profile"
+                    fill
+                    sizes="144px"
+                    priority
+                    className="object-cover"
+                  />
+                ) : (
+                  <span className="text-slate-400 font-bold text-xl">
+                    {profile.name?.[0] || "F"}
+                  </span>
+                )}
+              </div>
 
-        <p className="mt-4">{profile.bio || "No bio provided."}</p>
+              <div className="flex-1">
+                <h2 className="text-2xl font-extrabold text-slate-900">
+                  {profile.title || "Freelancer"}
+                </h2>
 
-        <p className="mt-4 font-semibold">₹{profile.hourlyRate}/hr</p>
+                <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold">
+                  <span className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-slate-700">
+                    <MapPin size={16} />
+                    {profile.city && profile.country
+                      ? `${profile.city}, ${profile.country}`
+                      : "Location not available"}
+                  </span>
 
-        <p className="mt-2 text-slate-500">
-          📍 {profile.city}, {profile.country}
-        </p>
+                  <span className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-slate-700">
+                    <Briefcase size={16} />₹{profile.hourlyRate || 0}/hr
+                  </span>
 
-        {/* CLIENT ACTION */}
-        {user?.role === "client" && (
-          <button
-            onClick={() => router.push(`/book/${id}`)}
-            className="mt-6 rounded bg-brand-primary px-6 py-3 font-semibold text-white hover:bg-blue-600"
-          >
-            Book Freelancer
-          </button>
-        )}
+                  <span className="inline-flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2 text-amber-700">
+                    <Star size={16} fill="currentColor" />
+                    {ratingSummary.avg} ({ratingSummary.count})
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => router.push(`/book/${profile.id}`)}
+                  className="mt-5 rounded-2xl bg-blue-600 px-6 py-3 font-extrabold text-white hover:bg-blue-700 shadow"
+                >
+                  Book this Freelancer
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Bio */}
+          <div className={cardClass}>
+            <h3 className="text-lg font-extrabold text-slate-900 mb-3">Bio</h3>
+            <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">
+              {profile.bio || "No bio provided yet."}
+            </p>
+          </div>
+
+          {/* Skills */}
+          <div className={cardClass}>
+            <h3 className="text-lg font-extrabold text-slate-900 mb-3">
+              Skills
+            </h3>
+
+            {profile.skills?.length ? (
+              <div className="flex flex-wrap gap-2">
+                {profile.skills.map((s, idx) => (
+                  <span
+                    key={idx}
+                    className="rounded-full bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700"
+                  >
+                    {s}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No skills added.</p>
+            )}
+          </div>
+
+          {/* Portfolio */}
+          <div className={cardClass}>
+            <h3 className="text-lg font-extrabold text-slate-900 mb-3">
+              Portfolio
+            </h3>
+
+            {profile.portfolio?.length ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {profile.portfolio.map((p, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5 font-bold text-slate-700"
+                  >
+                    {p}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No portfolio added.</p>
+            )}
+          </div>
+
+          {/* Past Works */}
+          <div className={cardClass}>
+            <h3 className="text-lg font-extrabold text-slate-900 mb-4">
+              Past Works
+            </h3>
+
+            {profile.pastWorks?.length ? (
+              <div className="space-y-4">
+                {profile.pastWorks.map((w, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="font-extrabold text-slate-900">
+                          {w.title || "Work"}
+                        </p>
+                        {w.year && (
+                          <p className="text-xs font-bold text-slate-500 mt-1">
+                            {w.year}
+                          </p>
+                        )}
+                      </div>
+
+                      {w.link && (
+                        <a
+                          href={w.link}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-extrabold text-blue-700 ring-1 ring-blue-100 hover:bg-blue-50"
+                        >
+                          <LinkIcon size={14} />
+                          View
+                        </a>
+                      )}
+                    </div>
+
+                    <p className="mt-2 text-sm text-slate-700 whitespace-pre-wrap">
+                      {w.description || "No description."}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No past works added.</p>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT 20% */}
+        <div className="lg:col-span-3">
+          <div className="sticky top-6 space-y-4">
+            <div className={cardClass}>
+              <h3 className="text-lg font-extrabold text-slate-900 mb-3">
+                Reviews
+              </h3>
+
+              {loadingReviews ? (
+                <div className="flex items-center gap-2 text-slate-600">
+                  <Loader2 className="animate-spin" size={18} />
+                  Loading reviews...
+                </div>
+              ) : reviews.length === 0 ? (
+                <p className="text-sm text-slate-500">No reviews yet.</p>
+              ) : (
+                <div className="space-y-4">
+                  {reviews.slice(0, 10).map((r) => (
+                    <div
+                      key={r._id}
+                      className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="font-bold text-slate-800 text-sm">
+                          {r.clientName || "Anonymous"}
+                        </p>
+
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-100 px-2 py-1 text-xs font-bold text-amber-700">
+                          <Star size={14} fill="currentColor" />
+                          {r.rating}
+                        </span>
+                      </div>
+
+                      <p className="mt-2 text-sm text-slate-600 line-clamp-4">
+                        {r.comment || "No comment"}
+                      </p>
+
+                      <p className="mt-2 text-xs text-slate-400">
+                        {new Date(r.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm">
+              <h4 className="font-extrabold mb-2">Why book this freelancer?</h4>
+              <ul className="text-sm text-slate-200 space-y-1">
+                <li>• Trusted reviews</li>
+                <li>• Verified profile</li>
+                <li>• Clear portfolio & work history</li>
+              </ul>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -11351,8 +12334,9 @@ export default function SearchPage() {
 
 import { useUser } from "@/context/UserContext";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import DashboardHeader from "@/components/DashboardHeader";
 
 export default function DashboardLayout({
   children,
@@ -11363,23 +12347,28 @@ export default function DashboardLayout({
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.replace("/login");
-    }
+    if (!loading && !user) router.replace("/login");
   }, [user, loading, router]);
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="animate-spin text-blue-600" size={40} />
+        <div className="flex items-center gap-3 text-slate-600 font-bold">
+          <Loader2 className="animate-spin" />
+          Loading dashboard...
+        </div>
       </div>
     );
   }
 
+  if (!user) return null;
+
   return (
-    <div className="min-h-screen bg-slate-50 flex">
-      {/* Sidebar can go here later */}
-      <main className="flex-1 p-8">{children}</main>
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+      {/* ✅ pass theme + toggleTheme to header */}
+      <DashboardHeader />
+
+      <main className="w-full px-4 sm:px-6 lg:px-12 py-8">{children}</main>
     </div>
   );
 }
@@ -11391,139 +12380,25 @@ export default function DashboardLayout({
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useUser } from "@/context/UserContext";
+import { Loader2 } from "lucide-react";
 
 export default function DashboardPage() {
-  const { user, loading, logout } = useUser();
   const router = useRouter();
+  const { user, loading } = useUser();
 
-  // 🔐 Auth protection ONLY
   useEffect(() => {
-    if (!loading && !user) {
-      router.push("/login");
-    }
+    if (!loading && !user) router.replace("/login");
+
+    if (!loading && user?.role === "client")
+      router.replace("/dashboard/client");
+    if (!loading && user?.role === "freelancer")
+      router.replace("/dashboard/freelancer");
   }, [loading, user, router]);
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-slate-600">Loading dashboard…</p>
-      </div>
-    );
-  }
-
-  if (!user) return null;
-
   return (
-    <div className="mx-auto max-w-5xl p-6">
-      {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold text-slate-900">Dashboard</h1>
-          <p className="text-slate-600">Welcome back, {user.name}</p>
-        </div>
-
-        <button
-          onClick={logout}
-          className="rounded-lg bg-red-500 px-4 py-2 font-semibold text-white hover:bg-red-600"
-        >
-          Logout
-        </button>
-      </div>
-
-      {/* Account Overview */}
-      <div className="mb-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-4 text-xl font-semibold text-slate-800">
-          Account Overview
-        </h2>
-
-        <div className="space-y-2 text-slate-700">
-          <p>
-            <strong>Email:</strong> {user.email}
-          </p>
-          <p>
-            <strong>Role:</strong>{" "}
-            <span className="capitalize">{user.role}</span>
-          </p>
-        </div>
-      </div>
-
-      {/* Role-based Sections */}
-      {user.role === "freelancer" && <FreelancerDashboard router={router} />}
-      {user.role === "client" && <ClientDashboard router={router} />}
-    </div>
-  );
-}
-
-/* =====================================================
-   FREELANCER DASHBOARD
-   ===================================================== */
-
-function FreelancerDashboard({ router }: { router: any }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 className="mb-4 text-xl font-semibold text-slate-800">
-        Freelancer Panel
-      </h2>
-
-      <ul className="space-y-3 text-slate-700">
-        <li>• View and manage your bookings</li>
-        <li>• Update your freelancer profile</li>
-        <li>• Respond to client requests</li>
-        <li>• Track reviews and ratings</li>
-      </ul>
-
-      <div className="mt-6 flex gap-4">
-        <button
-          onClick={() => router.push("/bookings")}
-          className="rounded-lg bg-brand-primary px-4 py-2 font-semibold text-white hover:bg-blue-600"
-        >
-          View Bookings
-        </button>
-
-        <button
-          onClick={() => router.push("/freelancer/profile/")}
-          className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          Edit Profile
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* =====================================================
-   CLIENT DASHBOARD
-   ===================================================== */
-
-function ClientDashboard({ router }: { router: any }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 className="mb-4 text-xl font-semibold text-slate-800">
-        Client Panel
-      </h2>
-
-      <ul className="space-y-3 text-slate-700">
-        <li>• Search for freelancers</li>
-        <li>• Manage your bookings</li>
-        <li>• Leave reviews</li>
-        <li>• Track project status</li>
-      </ul>
-
-      <div className="mt-6 flex gap-4">
-        <button
-          onClick={() => router.push("/search")}
-          className="rounded-lg bg-brand-primary px-4 py-2 font-semibold text-white hover:bg-blue-600"
-        >
-          Find Freelancers
-        </button>
-
-        <button
-          onClick={() => router.push("/bookings")}
-          className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          View Bookings
-        </button>
-      </div>
+    <div className="min-h-[50vh] flex items-center justify-center gap-3 text-slate-600">
+      <Loader2 className="animate-spin" />
+      Redirecting…
     </div>
   );
 }
@@ -11532,56 +12407,208 @@ function ClientDashboard({ router }: { router: any }) {
 
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
-import { Users, PlusCircle, Search } from "lucide-react";
+import {
+  Search,
+  CalendarCheck2,
+  Star,
+  Loader2,
+  ArrowRight,
+  BadgeCheck,
+} from "lucide-react";
+
+type Booking = {
+  _id: string;
+  serviceType: string;
+  preferredDate: string;
+  preferredTime: string;
+  status: "pending" | "confirmed" | "completed" | "cancelled";
+};
 
 export default function ClientDashboard() {
   const { user } = useUser();
+  const router = useRouter();
+
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadBookings = async () => {
+      try {
+        const res = await api.get("/bookings/mybookings");
+        setBookings(res.data?.data || []);
+      } catch {
+        setBookings([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadBookings();
+  }, []);
+
+  const stats = useMemo(() => {
+    const total = bookings.length;
+    const completed = bookings.filter((b) => b.status === "completed").length;
+    const confirmed = bookings.filter((b) => b.status === "confirmed").length;
+    const pending = bookings.filter((b) => b.status === "pending").length;
+    return { total, completed, confirmed, pending };
+  }, [bookings]);
+
+  const cardClass =
+    "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all";
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Client Hub</h1>
-          <p className="text-slate-500">
-            Manage your hires and find new talent.
-          </p>
+    <div className="space-y-6">
+      {/* Welcome */}
+      <div className="rounded-3xl bg-gradient-to-r from-slate-900 to-slate-700 p-8 text-white shadow">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+          <div>
+            <p className="text-sm text-slate-200 font-bold">Welcome back</p>
+            <h2 className="text-3xl font-extrabold mt-1">
+              {user?.name || "Client"}
+            </h2>
+            <p className="text-slate-200 mt-2">
+              Find verified freelancers near you and book instantly.
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => router.push("/search")}
+              className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 font-extrabold text-slate-900 hover:bg-slate-100"
+            >
+              <Search size={18} />
+              Find Freelancers
+            </button>
+
+            <button
+              onClick={() => router.push("/bookings")}
+              className="inline-flex items-center gap-2 rounded-2xl border border-white/30 px-5 py-3 font-extrabold text-white hover:bg-white/10"
+            >
+              <CalendarCheck2 size={18} />
+              My Bookings
+            </button>
+          </div>
         </div>
-        <button className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 transition">
-          <PlusCircle size={20} /> Post a Job
-        </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Users size={20} className="text-blue-600" /> My Freelancers
-          </h2>
-          <p className="text-slate-500 text-sm">
-            You haven't hired anyone yet.
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            TOTAL BOOKINGS
           </p>
-          <button className="mt-4 text-blue-600 text-sm font-medium hover:underline">
-            Browse Talent →
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {stats.total}
+          </p>
+        </div>
+
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            CONFIRMED
+          </p>
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {stats.confirmed}
+          </p>
+        </div>
+
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            PENDING
+          </p>
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {stats.pending}
+          </p>
+        </div>
+
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            COMPLETED
+          </p>
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {stats.completed}
+          </p>
+        </div>
+      </div>
+
+      {/* Recent bookings */}
+      <div className={cardClass}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-extrabold text-slate-900">
+            Recent Bookings
+          </h3>
+
+          <button
+            onClick={() => router.push("/bookings")}
+            className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-extrabold text-white hover:bg-slate-800"
+          >
+            View all <ArrowRight size={16} />
           </button>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Search size={20} className="text-blue-600" /> Recent Searches
-          </h2>
-          <div className="space-y-3">
-            {["React Developer", "UI Designer", "Node.js Expert"].map(
-              (term) => (
-                <div
-                  key={term}
-                  className="p-3 bg-slate-50 rounded-lg text-sm text-slate-700 hover:bg-slate-100 cursor-pointer"
-                >
-                  {term}
-                </div>
-              ),
-            )}
+        {loading ? (
+          <div className="flex items-center gap-2 text-slate-600">
+            <Loader2 className="animate-spin" size={18} />
+            Loading bookings...
           </div>
-        </div>
+        ) : bookings.length === 0 ? (
+          <div className="rounded-2xl bg-slate-50 p-6 ring-1 ring-black/5">
+            <p className="font-bold text-slate-700">No bookings yet</p>
+            <p className="text-sm text-slate-500 mt-1">
+              Start by searching freelancers near your location.
+            </p>
+
+            <button
+              onClick={() => router.push("/search")}
+              className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 font-extrabold text-white hover:bg-blue-700 shadow"
+            >
+              <BadgeCheck size={18} />
+              Find verified freelancers
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {bookings.slice(0, 5).map((b) => (
+              <div
+                key={b._id}
+                className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5 flex items-center justify-between"
+              >
+                <div>
+                  <p className="font-extrabold text-slate-900">
+                    {b.serviceType}
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    {new Date(b.preferredDate).toLocaleDateString()} ·{" "}
+                    {b.preferredTime}
+                  </p>
+                </div>
+
+                <span className="rounded-full bg-white px-4 py-2 text-xs font-extrabold uppercase tracking-widest ring-1 ring-black/5 text-slate-700">
+                  {b.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Tips */}
+      <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+        <h4 className="text-lg font-extrabold text-slate-900 mb-3">
+          Tips to get faster bookings
+        </h4>
+        <ul className="text-sm text-slate-600 space-y-2">
+          <li>• Choose the correct service type for accurate pricing</li>
+          <li>• Prefer morning slots for quicker confirmations</li>
+          <li>• Use precise address + landmark for faster arrival</li>
+          <li className="inline-flex items-center gap-2 font-bold text-amber-700">
+            <Star size={16} fill="currentColor" /> Leave review after completion
+          </li>
+        </ul>
       </div>
     </div>
   );
@@ -11591,129 +12618,447 @@ export default function ClientDashboard() {
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
-import { Wrench, Plus, Check } from "lucide-react";
+import {
+  Loader2,
+  CalendarCheck2,
+  Star,
+  TrendingUp,
+  User,
+  ArrowRight,
+  BadgeCheck,
+  MapPin,
+  Briefcase,
+  CheckCircle,
+  XCircle,
+  ClipboardList,
+} from "lucide-react";
+
+type Booking = {
+  _id: string;
+  serviceType: string;
+  preferredDate: string;
+  preferredTime: string;
+  status: "pending" | "confirmed" | "completed" | "cancelled";
+};
+
+type Profile = {
+  title?: string;
+  bio?: string;
+  skills?: string[];
+  hourlyRate?: number;
+  city?: string;
+  country?: string;
+  profilePic?: string;
+  location?: {
+    type: "Point";
+    coordinates: number[];
+  };
+  portfolio?: string[];
+  pastWorks?: any[];
+};
 
 export default function FreelancerDashboard() {
+  const router = useRouter();
   const { user } = useUser();
-  const [skills, setSkills] = useState<string[]>([]);
-  const [currentSkill, setCurrentSkill] = useState("");
-  const [bio, setBio] = useState("");
-  const [isUpdating, setIsUpdating] = useState(false);
 
-  const addSkill = () => {
-    if (currentSkill && !skills.includes(currentSkill)) {
-      setSkills([...skills, currentSkill]);
-      setCurrentSkill("");
+  const [loading, setLoading] = useState(true);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
+
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [toast, setToast] = useState<string>("");
+
+  const cardClass =
+    "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all";
+
+  const loadAll = async () => {
+    try {
+      setLoading(true);
+      const [bRes, pRes] = await Promise.all([
+        api.get("/bookings/mybookings"),
+        api.get("/freelancers/me"),
+      ]);
+
+      setBookings(bRes.data?.data || []);
+      setProfile(pRes.data?.profile || null);
+    } catch {
+      setBookings([]);
+      setProfile(null);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleProfileSubmit = async () => {
-    setIsUpdating(true);
+  useEffect(() => {
+    loadAll();
+  }, []);
 
-    // 1. Get real location from browser
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const coords = [pos.coords.longitude, pos.coords.latitude]; // [Long, Lat]
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(""), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
 
-        try {
-          await api.put("/freelancers/update-profile", {
-            skills,
-            bio,
-            location: {
-              type: "Point",
-              coordinates: coords,
-            },
-          });
-          alert("Profile updated with your real location!");
-          window.location.reload();
-        } catch (err) {
-          alert("Update failed");
-        } finally {
-          setIsUpdating(false);
-        }
-      },
-      (err) => {
-        alert("Please allow location access to be searchable!");
-        setIsUpdating(false);
-      },
-    );
+  const bookingStats = useMemo(() => {
+    const total = bookings.length;
+    const completed = bookings.filter((b) => b.status === "completed").length;
+    const confirmed = bookings.filter((b) => b.status === "confirmed").length;
+    const pending = bookings.filter((b) => b.status === "pending").length;
+    return { total, completed, confirmed, pending };
+  }, [bookings]);
+
+  const pendingBookings = useMemo(
+    () => bookings.filter((b) => b.status === "pending"),
+    [bookings],
+  );
+
+  const confirmedBookings = useMemo(
+    () => bookings.filter((b) => b.status === "confirmed"),
+    [bookings],
+  );
+
+  const profileCompletion = useMemo(() => {
+    if (!profile) return { percent: 0, missing: [] as string[] };
+
+    const missing: string[] = [];
+
+    if (!profile.title) missing.push("Professional title");
+    if (!profile.bio) missing.push("Bio");
+    if (!profile.skills || profile.skills.length < 5) missing.push("5+ skills");
+    if (!profile.portfolio || profile.portfolio.length < 2)
+      missing.push("Portfolio items");
+    if (!profile.pastWorks || profile.pastWorks.length < 2)
+      missing.push("Past works");
+    if (!profile.profilePic) missing.push("Profile picture");
+
+    const coords = profile.location?.coordinates || [];
+    if (!coords || coords.length !== 2) missing.push("Location");
+
+    const totalFields = 7;
+    const done = totalFields - missing.length;
+    const percent = Math.round((done / totalFields) * 100);
+
+    return { percent, missing };
+  }, [profile]);
+
+  const updateStatus = async (
+    bookingId: string,
+    status: "confirmed" | "completed" | "cancelled",
+  ) => {
+    try {
+      setActionLoading(`${bookingId}:${status}`);
+      await api.patch(`/bookings/${bookingId}/status`, { status });
+
+      setBookings((prev) =>
+        prev.map((b) => (b._id === bookingId ? { ...b, status } : b)),
+      );
+
+      setToast(`Booking updated → ${status}`);
+    } catch (err: any) {
+      setToast(err?.response?.data?.msg || "Failed to update booking");
+    } finally {
+      setActionLoading(null);
+    }
   };
 
-  return (
-    <div className="max-w-4xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-6">Freelancer Dashboard</h1>
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center gap-3 text-slate-600">
+        <Loader2 className="animate-spin" />
+        Loading freelancer dashboard…
+      </div>
+    );
+  }
 
-      {/* 🚀 PROFILE COMPLETION CARD */}
-      <div className="bg-white p-8 rounded-2xl shadow-sm border border-blue-100 mb-8">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
-            <Wrench size={24} />
+  return (
+    <div className="space-y-6">
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-6 right-6 z-50 rounded-2xl bg-slate-900 px-5 py-3 text-white font-extrabold shadow-lg">
+          {toast}
+        </div>
+      )}
+
+      {/* Welcome */}
+      <div className="rounded-3xl bg-gradient-to-r from-slate-900 to-slate-700 p-8 text-white shadow">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+          <div>
+            <p className="text-sm text-slate-200 font-bold">Welcome back</p>
+            <h2 className="text-3xl font-extrabold mt-1">
+              {user?.name || "Freelancer"}
+            </h2>
+            <p className="text-slate-200 mt-2">
+              Manage bookings & keep your profile strong to get more clients.
+            </p>
           </div>
-          <h2 className="text-xl font-bold">
-            Complete Your Professional Profile
-          </h2>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => router.push("/freelancer/profile")}
+              className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 font-extrabold text-slate-900 hover:bg-slate-100"
+            >
+              <User size={18} />
+              Edit Profile
+            </button>
+
+            <button
+              onClick={() => router.push("/freelancer/bookings")}
+              className="inline-flex items-center gap-2 rounded-2xl border border-white/30 px-5 py-3 font-extrabold text-white hover:bg-white/10"
+            >
+              <CalendarCheck2 size={18} />
+              All Bookings
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            TOTAL BOOKINGS
+          </p>
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {bookingStats.total}
+          </p>
         </div>
 
-        <p className="text-slate-500 mb-6">
-          Clients can't find you until you list your skills.
-        </p>
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            CONFIRMED
+          </p>
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {bookingStats.confirmed}
+          </p>
+        </div>
 
-        <div className="space-y-6">
-          {/* Skills Input */}
-          <div>
-            <label className="block text-sm font-semibold mb-2">
-              My Skills
-            </label>
-            <div className="flex gap-2 mb-3">
-              <input
-                type="text"
-                value={currentSkill}
-                onChange={(e) => setCurrentSkill(e.target.value)}
-                placeholder="e.g. Plumbing, UI Design"
-                className="flex-1 p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            PENDING
+          </p>
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {bookingStats.pending}
+          </p>
+        </div>
+
+        <div className={cardClass}>
+          <p className="text-xs font-extrabold tracking-widest text-slate-400">
+            COMPLETED
+          </p>
+          <p className="text-3xl font-extrabold text-slate-900 mt-2">
+            {bookingStats.completed}
+          </p>
+        </div>
+      </div>
+
+      {/* Requests + Profile */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* LEFT: Requests */}
+        <div className="lg:col-span-7 space-y-6">
+          {/* Pending Requests */}
+          <div className={cardClass}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
+                <ClipboardList size={20} />
+                Pending Requests
+              </h3>
+              <span className="text-xs font-extrabold text-slate-500">
+                {pendingBookings.length} pending
+              </span>
+            </div>
+
+            {pendingBookings.length === 0 ? (
+              <div className="rounded-2xl bg-slate-50 p-6 ring-1 ring-black/5">
+                <p className="font-bold text-slate-700">No pending requests</p>
+                <p className="text-sm text-slate-500 mt-1">
+                  When clients book your service, requests will appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {pendingBookings.slice(0, 6).map((b) => (
+                  <div
+                    key={b._id}
+                    className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5 flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                  >
+                    <div>
+                      <p className="font-extrabold text-slate-900">
+                        {b.serviceType}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        {new Date(b.preferredDate).toLocaleDateString()} ·{" "}
+                        {b.preferredTime}
+                      </p>
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => updateStatus(b._id, "confirmed")}
+                        disabled={actionLoading === `${b._id}:confirmed`}
+                        className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-extrabold text-white hover:bg-emerald-700 disabled:opacity-60"
+                      >
+                        {actionLoading === `${b._id}:confirmed` ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <CheckCircle size={16} />
+                        )}
+                        Accept
+                      </button>
+
+                      <button
+                        onClick={() => updateStatus(b._id, "cancelled")}
+                        disabled={actionLoading === `${b._id}:cancelled`}
+                        className="inline-flex items-center gap-2 rounded-2xl bg-red-600 px-4 py-2 text-sm font-extrabold text-white hover:bg-red-700 disabled:opacity-60"
+                      >
+                        {actionLoading === `${b._id}:cancelled` ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <XCircle size={16} />
+                        )}
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Confirmed Jobs */}
+          <div className={cardClass}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-extrabold text-slate-900">
+                Confirmed Jobs
+              </h3>
+              <span className="text-xs font-extrabold text-slate-500">
+                {confirmedBookings.length} active
+              </span>
+            </div>
+
+            {confirmedBookings.length === 0 ? (
+              <div className="rounded-2xl bg-slate-50 p-6 ring-1 ring-black/5">
+                <p className="font-bold text-slate-700">No active jobs</p>
+                <p className="text-sm text-slate-500 mt-1">
+                  Confirmed bookings will appear here until completed.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {confirmedBookings.slice(0, 6).map((b) => (
+                  <div
+                    key={b._id}
+                    className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5 flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                  >
+                    <div>
+                      <p className="font-extrabold text-slate-900">
+                        {b.serviceType}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        {new Date(b.preferredDate).toLocaleDateString()} ·{" "}
+                        {b.preferredTime}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => updateStatus(b._id, "completed")}
+                      disabled={actionLoading === `${b._id}:completed`}
+                      className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-extrabold text-white hover:bg-blue-700 disabled:opacity-60"
+                    >
+                      {actionLoading === `${b._id}:completed` ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <CheckCircle size={16} />
+                      )}
+                      Mark Completed
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT: Profile strength */}
+        <div className="lg:col-span-5 space-y-6">
+          <div className={cardClass}>
+            <h3 className="text-xl font-extrabold text-slate-900 mb-4">
+              Profile Strength
+            </h3>
+
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-bold text-slate-600">
+                Completion Score
+              </p>
+              <p className="text-sm font-extrabold text-slate-900">
+                {profileCompletion.percent}%
+              </p>
+            </div>
+
+            <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
+              <div
+                className="h-full bg-blue-600 rounded-full transition-all"
+                style={{ width: `${profileCompletion.percent}%` }}
               />
-              <button
-                onClick={addSkill}
-                className="bg-slate-900 text-white p-2 rounded-lg"
-              >
-                <Plus size={20} />
-              </button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {skills.map((s) => (
-                <span
-                  key={s}
-                  className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm font-medium border border-blue-200"
-                >
-                  {s}
-                </span>
-              ))}
-            </div>
+
+            {profileCompletion.missing.length > 0 ? (
+              <div className="mt-4 rounded-2xl bg-amber-50 ring-1 ring-amber-100 p-4">
+                <p className="text-sm font-extrabold text-amber-800 flex items-center gap-2">
+                  <TrendingUp size={16} />
+                  Improve visibility by adding:
+                </p>
+                <ul className="mt-2 text-sm text-amber-900 space-y-1 font-semibold">
+                  {profileCompletion.missing.slice(0, 6).map((m) => (
+                    <li key={m}>• {m}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-2xl bg-emerald-50 ring-1 ring-emerald-100 p-4">
+                <p className="text-sm font-extrabold text-emerald-800 flex items-center gap-2">
+                  <BadgeCheck size={16} />
+                  Perfect profile — you are fully searchable!
+                </p>
+              </div>
+            )}
+
+            <button
+              onClick={() => router.push("/freelancer/profile")}
+              className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 font-extrabold text-white hover:bg-slate-800"
+            >
+              Update Profile <ArrowRight size={18} />
+            </button>
           </div>
 
-          {/* Bio Input */}
-          <div>
-            <label className="block text-sm font-semibold mb-2">
-              Short Bio
-            </label>
-            <textarea
-              className="w-full p-3 border rounded-lg h-24 outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Tell clients about your experience..."
-              value={bio}
-              onChange={(e) => setBio(e.target.value)}
-            />
-          </div>
+          <div className={cardClass}>
+            <h3 className="text-xl font-extrabold text-slate-900 mb-4">
+              Quick Info
+            </h3>
 
-          <button
-            onClick={handleProfileSubmit}
-            disabled={isUpdating || skills.length === 0}
-            className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition disabled:bg-slate-300"
-          >
-            {isUpdating ? "Saving..." : "Make me Searchable"}
-          </button>
+            <div className="space-y-3 text-sm font-bold text-slate-700">
+              <p className="flex items-center gap-2">
+                <Briefcase size={16} className="text-slate-500" />
+                {profile?.title || "No title yet"}
+              </p>
+
+              <p className="flex items-center gap-2">
+                <MapPin size={16} className="text-slate-500" />
+                {profile?.city && profile?.country
+                  ? `${profile.city}, ${profile.country}`
+                  : "Location not set"}
+              </p>
+
+              <p className="flex items-center gap-2">
+                <Star size={16} className="text-amber-500" />
+                Reviews increase trust (ask clients to leave review)
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -11870,6 +13215,64 @@ export default function RegisterPage() {
     </div>
   );
 }
+--- FILE: ./client/app/forgot-password/page.tsx ---
+
+"use client";
+
+import { useState } from "react";
+import api from "@/services/api";
+import Link from "next/link";
+
+export default function ForgotPasswordPage() {
+  const [email, setEmail] = useState("");
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    setLoading(true);
+    setMsg("");
+    try {
+      const res = await api.post("/auth/forgot-password", { email });
+      setMsg(res.data.msg);
+    } catch {
+      setMsg("Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-4">Forgot Password</h1>
+
+      <input
+        className="border rounded w-full p-2"
+        placeholder="Your email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+
+      <button
+        type="button"
+        disabled={loading}
+        onClick={submit}
+        className="mt-4 w-full bg-blue-600 text-white py-2 rounded"
+      >
+        {loading ? "Sending..." : "Send Reset Link"}
+      </button>
+
+      {msg && <p className="mt-3 text-sm text-slate-600">{msg}</p>}
+
+      <Link
+        href="/login"
+        className="block mt-4 text-sm text-blue-600 underline"
+      >
+        Back to login
+      </Link>
+    </div>
+  );
+}
+
 --- FILE: ./client/app/layout.tsx ---
 
 import type { Metadata } from "next";
@@ -11878,6 +13281,8 @@ import "./globals.css";
 import Providers from "./providers";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import HeaderWrapper from "@/components/HeaderWrapper";
+import ThemeInit from "@/components/ThemeInit";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -11902,11 +13307,15 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen bg-gray-50 text-gray-900`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100`}
       >
         <Providers>
-          <Header />
+          {/* ✅ Show Header only on non-dashboard routes */}
+          <HeaderWrapper />
+          <ThemeInit />
           <main className="flex-grow">{children}</main>
+
+          {/* ✅ Optional: hide footer on dashboard too */}
           <Footer />
         </Providers>
       </body>
@@ -12077,6 +13486,65 @@ export default function BookFreelancerPage() {
   );
 }
 
+--- FILE: ./client/app/reset-password/page.tsx ---
+
+"use client";
+
+import { useState } from "react";
+import api from "@/services/api";
+import { useSearchParams, useRouter } from "next/navigation";
+
+export default function ResetPasswordPage() {
+  const sp = useSearchParams();
+  const router = useRouter();
+  const token = sp.get("token");
+
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    if (!token) return setMsg("Invalid reset token.");
+
+    setLoading(true);
+    setMsg("");
+    try {
+      const res = await api.post("/auth/reset-password", { token, password });
+      setMsg(res.data.msg);
+      setTimeout(() => router.push("/login"), 1500);
+    } catch (err: any) {
+      setMsg(err?.response?.data?.msg || "Reset failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-4">Reset Password</h1>
+
+      <input
+        type="password"
+        className="border rounded w-full p-2"
+        placeholder="New password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+
+      <button
+        type="button"
+        disabled={loading}
+        onClick={submit}
+        className="mt-4 w-full bg-green-600 text-white py-2 rounded"
+      >
+        {loading ? "Resetting..." : "Reset Password"}
+      </button>
+
+      {msg && <p className="mt-3 text-sm text-slate-600">{msg}</p>}
+    </div>
+  );
+}
+
 --- FILE: ./client/app/map-search/page.tsx ---
 
 "use client";
@@ -12183,36 +13651,32 @@ export default HomePage;
 @import "tailwindcss";
 
 @theme {
-  /* Industry Standard: Customizing your brand colors directly in CSS */
   --color-brand-primary: #3b82f6;
-  /* A professional blue */
   --color-brand-secondary: #10b981;
-  /* A clean green */
 
-  /* Adding the Geist fonts we set up in the Layout */
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-/* Base styles for the long term */
+/* Base styles */
 @layer base {
   body {
-    @apply antialiased text-slate-900 bg-slate-50;
+    @apply antialiased text-slate-900 bg-slate-50 dark:text-slate-100 dark:bg-slate-950;
   }
 }
 
-/* Industry Standard: Light/Dark mode using modern CSS variables */
+/* ✅ Optional modern variables controlled by class */
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-  }
+/* ✅ dark theme when toggle sets html.dark */
+html.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
 }
+
 --- FILE: ./client/app/login/page.tsx ---
 
 "use client";
@@ -12220,6 +13684,7 @@ export default HomePage;
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
+import Link from "next/link";
 import { useUser } from "@/context/UserContext";
 
 export default function LoginPage() {
@@ -12331,6 +13796,14 @@ export default function LoginPage() {
         >
           {submitting ? "Logging in…" : "Login"}
         </button>
+        <div className="mt-2 text-right">
+          <Link
+            href="/forgot-password"
+            className="text-sm text-blue-600 hover:underline"
+          >
+            Forgot password?
+          </Link>
+        </div>
 
         {error && (
           <p className="mt-4 text-center text-sm text-red-600">{error}</p>
@@ -12453,148 +13926,236 @@ function DashboardCard({ title, value }) {
 --- FILE: ./client/app/freelancer/bookings/page.js ---
 
 "use client";
+import MyBookingsPage from "@/components/MyBookingsPage";
 
-import React, { useEffect, useState } from "react";
-import api from "@/services/api";
-import { useRouter } from "next/navigation";
-import ReviewModal from "@/components/ReviewModal";
-
-export default function MyBookingsPage() {
-  const router = useRouter();
-  const [bookings, setBookings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showReview, setShowReview] = useState(false);
-  const [selectedBooking, setSelectedBooking] = useState(null);
-
-  const updateStatus = async (id, status) => {
-    try {
-      await api.patch(`/bookings/${id}/status`, { status });
-
-      setBookings((prev) =>
-        prev.map((b) => (b._id === id ? { ...b, status } : b)),
-      );
-    } catch (err) {
-      alert(err.response?.data?.msg || "Failed to update booking status");
-    }
-  };
-
-  useEffect(() => {
-    api
-      .get("/bookings/mybookings")
-      .then((res) => setBookings(res.data.data))
-      .catch((err) => {
-        if (err.response?.status === 401) router.push("/login");
-      })
-      .finally(() => setLoading(false));
-  }, [router]);
-
-  if (loading) return <p>Loading bookings...</p>;
-
-  return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">My Bookings</h1>
-
-      {bookings.length === 0 && <p>No bookings found.</p>}
-
-      {bookings.map((b) => (
-        <div key={b._id} className="border p-4 mb-3 rounded">
-          <p>
-            <b>Service:</b> {b.serviceType}
-          </p>
-
-          <p>
-            <b>Client:</b> {b.clientId?.name}
-          </p>
-
-          <p>
-            <b>Date:</b> {new Date(b.startTime).toDateString()}
-          </p>
-
-          <p>
-            <b>Time:</b> {new Date(b.startTime).toLocaleTimeString()} –{" "}
-            {new Date(b.endTime).toLocaleTimeString()}
-          </p>
-
-          <p>
-            <b>Duration:</b> {b.estimatedDurationMinutes} mins
-          </p>
-
-          <p>
-            <b>Status:</b> <span className="font-semibold">{b.status}</span>
-          </p>
-
-          {b.status === "pending" && (
-            <div className="mt-3 flex gap-3">
-              <button
-                onClick={() => updateStatus(b._id, "confirmed")}
-                className="px-4 py-2 bg-green-600 text-white rounded"
-              >
-                Accept
-              </button>
-
-              <button
-                onClick={() => updateStatus(b._id, "cancelled")}
-                className="px-4 py-2 bg-red-600 text-white rounded"
-              >
-                Reject
-              </button>
-            </div>
-          )}
-
-          {b.status === "completed" && (
-            <button
-              onClick={() => {
-                setSelectedBooking(b._id);
-                setShowReview(true);
-              }}
-              className="mt-3 px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
-            >
-              Leave Review
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
-  );
+export default function Page() {
+  return <MyBookingsPage />;
 }
 
 --- FILE: ./client/app/freelancer/profile/page.tsx ---
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
+import {
+  Camera,
+  MapPin,
+  Star,
+  BadgeCheck,
+  Briefcase,
+  Link as LinkIcon,
+  Plus,
+  Trash2,
+  Loader2,
+  X,
+} from "lucide-react";
+import Image from "next/image";
 import { getCurrentLocation, reverseGeocode } from "@/utils/geolocation";
+
+type Review = {
+  _id: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+  clientName?: string;
+};
+
+type PastWork = {
+  title: string;
+  description: string;
+  link?: string;
+  year?: string;
+};
+
+type Profile = {
+  _id?: string;
+  name?: string;
+  title: string;
+  bio: string;
+  skills: string[];
+  hourlyRate: number;
+  latitude: number | null;
+  longitude: number | null;
+  city: string;
+  country: string;
+  profilePic?: string;
+  portfolio?: string[];
+  pastWorks?: PastWork[];
+};
 
 export default function FreelancerProfilePage() {
   const { user, loading } = useUser();
   const router = useRouter();
-  const [isEditing, setIsEditing] = useState(false);
-  const [originalProfile, setOriginalProfile] = useState<typeof profile | null>(
-    null,
-  );
 
-  const [profile, setProfile] = useState<{
-    title: string;
-    bio: string;
-    skills: string[];
-    hourlyRate: number;
-    latitude: number | null;
-    longitude: number | null;
-    city: string;
-    country: string;
-  } | null>(null);
-
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [uploadingPic, setUploadingPic] = useState(false);
+  const [skillInput, setSkillInput] = useState("");
+
   const [locationStatus, setLocationStatus] = useState<
     "idle" | "fetching" | "ready" | "error"
   >("idle");
-  const [error, setError] = useState("");
+
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(true);
+
+  const ratingSummary = useMemo(() => {
+    if (!reviews.length) return { avg: 0, count: 0 };
+    const avg =
+      reviews.reduce((a, r) => a + (r.rating || 0), 0) / reviews.length;
+    return { avg: Number(avg.toFixed(1)), count: reviews.length };
+  }, [reviews]);
 
   /* ----------------------------------------
-     AUTH + ROLE GUARD (NO SIDE EFFECTS)
+     helpers: cards style
+  ----------------------------------------- */
+  const cardClass =
+    "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all";
+
+  /* ----------------------------------------
+     Upload profile pic
+  ----------------------------------------- */
+  const uploadProfilePic = async (file: File) => {
+    try {
+      setUploadingPic(true);
+
+      const form = new FormData();
+      form.append("image", file);
+
+      const res = await api.post("/uploads/profile-pic", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      setProfile((prev) =>
+        prev ? { ...prev, profilePic: res.data.profilePic } : prev,
+      );
+    } catch (err: any) {
+      alert(err?.response?.data?.msg || "Failed to upload profile picture");
+    } finally {
+      setUploadingPic(false);
+    }
+  };
+  const addSkill = () => {
+    const skill = skillInput.trim();
+    if (!skill) return;
+
+    setProfile((prev) => {
+      if (!prev) return prev;
+
+      const existing = (prev.skills || []).map((s) => s.toLowerCase());
+      if (existing.includes(skill.toLowerCase())) return prev;
+
+      return { ...prev, skills: [...(prev.skills || []), skill] };
+    });
+
+    setSkillInput("");
+  };
+  const addSuggestedSkill = (skill: string) => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+
+      const existing = (prev.skills || []).map((s) => s.toLowerCase());
+      if (existing.includes(skill.toLowerCase())) return prev;
+
+      return { ...prev, skills: [...(prev.skills || []), skill] };
+    });
+  };
+
+  const removeSkill = (idx: number) => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      const updated = [...(prev.skills || [])];
+      updated.splice(idx, 1);
+      return { ...prev, skills: updated };
+    });
+  };
+  const suggestedSkills = useMemo(() => {
+    const title = (profile?.title || "").toLowerCase();
+    const portfolio = (profile?.portfolio || []).join(" ").toLowerCase();
+
+    const bag = new Set<string>();
+
+    // always useful
+    [
+      "Punctuality",
+      "Professionalism",
+      "Customer Support",
+      "Safety Compliance",
+      "Problem Solving",
+      "Time Management",
+    ].forEach((s) => bag.add(s));
+
+    // Electrician
+    if (title.includes("electric") || portfolio.includes("electric")) {
+      [
+        "Wiring",
+        "Switch Board Repair",
+        "Fan Installation",
+        "Light Installation",
+        "MCB/Fuse Repair",
+        "Electrical Troubleshooting",
+      ].forEach((s) => bag.add(s));
+    }
+
+    // Plumbing
+    if (title.includes("plumb") || portfolio.includes("plumb")) {
+      [
+        "Pipe Fixing",
+        "Leak Repair",
+        "Tap Repair",
+        "Bathroom Fittings",
+        "Water Tank Maintenance",
+        "Drain Cleaning",
+      ].forEach((s) => bag.add(s));
+    }
+
+    // AC / Appliance
+    if (
+      title.includes("ac") ||
+      title.includes("air") ||
+      portfolio.includes("ac")
+    ) {
+      [
+        "AC Installation",
+        "AC Servicing",
+        "Gas Refill",
+        "Split AC Repair",
+        "Cooling Issue Diagnosis",
+      ].forEach((s) => bag.add(s));
+    }
+
+    // Carpentry
+    if (title.includes("carpent") || portfolio.includes("wood")) {
+      [
+        "Furniture Repair",
+        "Door Installation",
+        "Cupboard Work",
+        "Wood Polishing",
+      ].forEach((s) => bag.add(s));
+    }
+
+    // Cleaning
+    if (title.includes("clean") || portfolio.includes("clean")) {
+      ["Home Cleaning", "Kitchen Cleaning", "Bathroom Cleaning"].forEach((s) =>
+        bag.add(s),
+      );
+    }
+
+    const current = new Set(
+      (profile?.skills || []).map((s) => s.toLowerCase()),
+    );
+
+    return Array.from(bag)
+      .filter((s) => !current.has(s.toLowerCase()))
+      .slice(0, 12);
+  }, [profile?.title, profile?.portfolio, profile?.skills]);
+
+  /* ----------------------------------------
+     AUTH GUARD
   ----------------------------------------- */
   useEffect(() => {
     if (!loading && (!user || user.role !== "freelancer")) {
@@ -12603,7 +14164,7 @@ export default function FreelancerProfilePage() {
   }, [loading, user, router]);
 
   /* ----------------------------------------
-     LOAD PROFILE (OR INIT EMPTY)
+     LOAD PROFILE
   ----------------------------------------- */
   useEffect(() => {
     if (user?.role !== "freelancer") return;
@@ -12611,11 +14172,22 @@ export default function FreelancerProfilePage() {
     api
       .get("/freelancers/me")
       .then((res) => {
-        setProfile(res.data.profile);
-        setLocationStatus("ready");
+        const loaded: Profile = res.data.profile;
+
+        setProfile({
+          ...loaded,
+          name: loaded?.name || user?.name || "Freelancer",
+          portfolio: loaded?.portfolio || [],
+          pastWorks: loaded?.pastWorks || [],
+          profilePic: loaded?.profilePic || "",
+        });
+
+        const hasCoords = loaded?.latitude != null && loaded?.longitude != null;
+        setLocationStatus(hasCoords ? "ready" : "idle");
       })
       .catch(() => {
         setProfile({
+          name: user?.name || "Freelancer",
           title: "",
           bio: "",
           skills: [],
@@ -12624,9 +14196,46 @@ export default function FreelancerProfilePage() {
           longitude: null,
           city: "",
           country: "",
+          profilePic: "",
+          portfolio: [],
+          pastWorks: [],
         });
+        setLocationStatus("idle");
       });
   }, [user]);
+
+  /* ----------------------------------------
+     LOAD REVIEWS (RIGHT PANEL)
+  ----------------------------------------- */
+  useEffect(() => {
+    const loadReviews = async () => {
+      try {
+        if (!profile?._id) return;
+
+        setLoadingReviews(true);
+        const res = await api.get(`/reviews/freelancer/${profile._id}`);
+        setReviews(res.data?.data || []);
+      } catch {
+        setReviews([]);
+      } finally {
+        setLoadingReviews(false);
+      }
+    };
+
+    loadReviews();
+  }, [profile?._id]);
+  const removeProfilePic = async () => {
+    try {
+      setUploadingPic(true);
+      await api.delete("/uploads/profile-pic");
+
+      setProfile((prev) => (prev ? { ...prev, profilePic: "" } : prev));
+    } catch (err: any) {
+      alert(err?.response?.data?.msg || "Failed to remove profile picture");
+    } finally {
+      setUploadingPic(false);
+    }
+  };
 
   /* ----------------------------------------
      LOCATION FETCH
@@ -12637,7 +14246,6 @@ export default function FreelancerProfilePage() {
       setError("");
 
       const { latitude, longitude } = await getCurrentLocation();
-      const { city, country } = await reverseGeocode(latitude, longitude);
 
       setProfile((prev) =>
         prev
@@ -12645,16 +14253,29 @@ export default function FreelancerProfilePage() {
               ...prev,
               latitude,
               longitude,
-              city,
-              country,
             }
           : prev,
       );
 
+      try {
+        const { city, country } = await reverseGeocode(latitude, longitude);
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                city,
+                country,
+              }
+            : prev,
+        );
+      } catch {}
+
       setLocationStatus("ready");
     } catch {
       setLocationStatus("error");
-      setError("Location permission is required to continue.");
+      setError(
+        "Unable to fetch location. Please allow location access and retry.",
+      );
     }
   };
 
@@ -12683,94 +14304,565 @@ export default function FreelancerProfilePage() {
   };
 
   /* ----------------------------------------
-     RENDER STATES
+     helpers
   ----------------------------------------- */
+  const addPortfolioItem = () => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      return { ...prev, portfolio: [...(prev.portfolio || []), ""] };
+    });
+  };
+
+  const removePortfolioItem = (idx: number) => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      const items = [...(prev.portfolio || [])];
+      items.splice(idx, 1);
+      return { ...prev, portfolio: items };
+    });
+  };
+
+  const addPastWork = () => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      const works = [...(prev.pastWorks || [])];
+      works.unshift({ title: "", description: "", link: "", year: "" });
+      return { ...prev, pastWorks: works };
+    });
+  };
+
+  const removePastWork = (idx: number) => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      const works = [...(prev.pastWorks || [])];
+      works.splice(idx, 1);
+      return { ...prev, pastWorks: works };
+    });
+  };
+
   if (loading || !profile) {
-    return <p className="p-6">Loading profile…</p>;
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center gap-3 text-slate-600">
+        <Loader2 className="animate-spin" />
+        Loading profile…
+      </div>
+    );
   }
 
+  const hasCoords = profile.latitude != null && profile.longitude != null;
+
+  const completion = (() => {
+    let score = 0;
+    if (profile.profilePic) score += 20;
+    if (profile.title?.trim()) score += 15;
+    if (profile.bio?.trim() && profile.bio.trim().length >= 30) score += 15;
+    if (profile.skills?.length >= 3) score += 15;
+    if ((profile.portfolio || []).filter(Boolean).length >= 2) score += 15;
+    if ((profile.pastWorks || []).length >= 1) score += 10;
+    if (hasCoords) score += 10;
+    return Math.min(score, 100);
+  })();
+
   return (
-    <div className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-6 text-3xl font-semibold text-slate-900">
-        Freelancer Profile
-      </h1>
-
-      {/* LOCATION */}
-      <div className="mb-6 rounded-xl border bg-white p-4">
-        <h2 className="mb-2 font-semibold">Location (Required)</h2>
-
-        {locationStatus !== "ready" && (
-          <button
-            onClick={fetchLocation}
-            className="rounded bg-brand-primary px-4 py-2 font-semibold text-white"
-          >
-            {locationStatus === "fetching"
-              ? "Fetching location…"
-              : "Use my current location"}
-          </button>
-        )}
-
-        {locationStatus === "ready" && (
-          <p className="text-slate-700">
-            📍 {profile.city}, {profile.country}
-          </p>
-        )}
-
-        {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+    <div className="mx-auto max-w-7xl p-6">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
+          Freelancer Profile
+        </h1>
+        <p className="text-slate-500 mt-2">
+          Build trust: profile + portfolio + reviews = bookings.
+        </p>
       </div>
 
-      {/* PROFILE FORM */}
-      <div className="space-y-4 rounded-xl bg-white p-6 shadow">
-        <input
-          className="w-full rounded border p-2"
-          placeholder="Professional title"
-          value={profile.title}
-          onChange={(e) => setProfile({ ...profile, title: e.target.value })}
-        />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* LEFT 80% */}
+        <div className="lg:col-span-9 space-y-6">
+          {/* Identity */}
+          <div className={cardClass}>
+            <div className="flex flex-col md:flex-row md:items-center gap-6">
+              {/* Pic */}
+              <div className="relative h-36 w-36 overflow-hidden rounded-3xl bg-slate-50 ring-1 ring-black/10 flex items-center justify-center">
+                {profile.profilePic ? (
+                  <Image
+                    src={profile.profilePic}
+                    alt="Profile"
+                    fill
+                    sizes="144px"
+                    priority
+                    className="object-cover"
+                  />
+                ) : (
+                  <Camera className="text-slate-300" size={32} />
+                )}
+                {profile.profilePic && (
+                  <button
+                    type="button"
+                    onClick={removeProfilePic}
+                    disabled={uploadingPic}
+                    title="Remove photo"
+                    className="absolute bottom-2 left-2 rounded-full bg-red-600 p-2 text-white hover:bg-red-700 disabled:opacity-60 shadow"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
 
-        <textarea
-          className="w-full rounded border p-2"
-          placeholder="Bio"
-          rows={4}
-          value={profile.bio}
-          onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
-        />
+                <label className="absolute bottom-2 right-2 cursor-pointer rounded-full bg-slate-900 p-2 text-white hover:bg-slate-700 shadow">
+                  <Camera size={16} />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) uploadProfilePic(file);
+                    }}
+                  />
+                </label>
+              </div>
 
-        <input
-          className="w-full rounded border p-2"
-          placeholder="Skills (comma separated)"
-          value={profile.skills.join(", ")}
-          onChange={(e) =>
-            setProfile({
-              ...profile,
-              skills: e.target.value
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean),
-            })
-          }
-        />
+              {/* Name + title */}
+              <div className="flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-2xl font-extrabold text-slate-900">
+                    {profile.name}
+                  </h2>
 
-        <input
-          type="number"
-          className="w-full rounded border p-2"
-          placeholder="Hourly rate"
-          value={profile.hourlyRate}
-          onChange={(e) =>
-            setProfile({
-              ...profile,
-              hourlyRate: Number(e.target.value),
-            })
-          }
-        />
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
+                    <BadgeCheck size={14} />
+                    Verified
+                  </span>
 
-        <button
-          onClick={saveProfile}
-          disabled={saving}
-          className="rounded bg-brand-primary px-4 py-2 font-semibold text-white disabled:opacity-60"
-        >
-          {saving ? "Saving…" : "Save Profile"}
-        </button>
+                  {!hasCoords && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-red-50 border border-red-100 px-3 py-1 text-xs font-bold text-red-700">
+                      Profile Incomplete
+                    </span>
+                  )}
+
+                  {hasCoords && completion === 100 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-100 px-3 py-1 text-xs font-bold text-blue-700">
+                      100% Complete
+                    </span>
+                  )}
+                </div>
+
+                <input
+                  className="mt-3 w-full rounded-2xl ring-1 ring-black/10 px-4 py-3 font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Professional title (example: Electrician | Plumbing Expert)"
+                  value={profile.title}
+                  onChange={(e) =>
+                    setProfile({ ...profile, title: e.target.value })
+                  }
+                />
+
+                {/* completion bar */}
+                <div className="mt-4">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-600">
+                    <span>Profile completion</span>
+                    <span>{completion}%</span>
+                  </div>
+
+                  <div className="mt-2 h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-blue-600 transition-all"
+                      style={{ width: `${completion}%` }}
+                    />
+                  </div>
+
+                  {!hasCoords && (
+                    <p className="mt-2 text-xs text-red-600 font-semibold">
+                      Location is required to activate your freelancer profile.
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-3 text-sm font-semibold">
+                  <span className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-slate-700">
+                    <MapPin size={16} />
+                    {profile.city && profile.country
+                      ? `${profile.city}, ${profile.country}`
+                      : "Location not set"}
+                  </span>
+
+                  <span className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-slate-700">
+                    <Briefcase size={16} />₹{profile.hourlyRate || 0}/hr
+                  </span>
+
+                  <span className="inline-flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2 text-amber-700">
+                    <Star size={16} fill="currentColor" />
+                    {ratingSummary.avg} ({ratingSummary.count})
+                  </span>
+                </div>
+              </div>
+
+              {/* Save */}
+              <div className="flex flex-col gap-3">
+                <button
+                  type="button"
+                  disabled={saving || !hasCoords}
+                  onClick={saveProfile}
+                  className="rounded-2xl bg-brand-primary px-6 py-3 font-bold text-white disabled:opacity-60 disabled:cursor-not-allowed shadow hover:shadow-md transition"
+                >
+                  {saving ? "Saving..." : "Save Profile"}
+                </button>
+
+                {!hasCoords && (
+                  <p className="text-xs text-red-600 font-semibold">
+                    Location required before saving.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Bio */}
+          <div className={cardClass}>
+            <h3 className="text-lg font-extrabold text-slate-900 mb-3">Bio</h3>
+            <textarea
+              className="w-full rounded-2xl ring-1 ring-black/10 p-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              rows={5}
+              placeholder="Write about your experience, expertise, and professionalism."
+              value={profile.bio}
+              onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
+            />
+          </div>
+
+          {/* Skills */}
+          <div className={cardClass}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-extrabold text-slate-900">Skills</h3>
+
+              <button
+                type="button"
+                onClick={addSkill}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 font-bold text-white hover:bg-slate-800 shadow"
+              >
+                <Plus size={18} />
+                Add
+              </button>
+            </div>
+
+            {/* Input */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                className="flex-1 rounded-2xl ring-1 ring-black/10 p-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Enter a skill (ex: Plumbing)"
+                value={skillInput}
+                onChange={(e) => setSkillInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addSkill();
+                  }
+                }}
+              />
+            </div>
+
+            {/* Suggested Skills */}
+            {suggestedSkills.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-bold text-slate-500 mb-2">
+                  Suggested skills (tap to add)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedSkills.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => addSuggestedSkill(s)}
+                      className="rounded-full bg-blue-50 text-blue-700 border border-blue-100 px-3 py-1.5 text-xs font-extrabold hover:bg-blue-100 transition"
+                    >
+                      + {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Skills list */}
+            {(profile.skills || []).length === 0 ? (
+              <p className="mt-3 text-sm text-slate-500">
+                Add skills to improve your search visibility.
+              </p>
+            ) : (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {profile.skills.map((s, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700"
+                  >
+                    {s}
+                    <button
+                      type="button"
+                      onClick={() => removeSkill(idx)}
+                      className="rounded-full p-1 hover:bg-slate-200"
+                      title="Remove skill"
+                    >
+                      <X size={14} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Portfolio */}
+          <div className={cardClass}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-extrabold text-slate-900">
+                Portfolio (What I can do)
+              </h3>
+              <button
+                type="button"
+                onClick={addPortfolioItem}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 font-bold text-white hover:bg-slate-800 shadow"
+              >
+                <Plus size={18} />
+                Add
+              </button>
+            </div>
+
+            {(profile.portfolio || []).length === 0 ? (
+              <p className="text-slate-500 text-sm">
+                Add services you provide.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {(profile.portfolio || []).map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="flex gap-2 rounded-2xl bg-slate-50 p-3 ring-1 ring-black/5"
+                  >
+                    <input
+                      className="flex-1 rounded-xl ring-1 ring-black/10 px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder={`Portfolio item ${idx + 1}`}
+                      value={item}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setProfile((prev) => {
+                          if (!prev) return prev;
+                          const updated = [...(prev.portfolio || [])];
+                          updated[idx] = val;
+                          return { ...prev, portfolio: updated };
+                        });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removePortfolioItem(idx)}
+                      className="rounded-xl bg-white ring-1 ring-black/10 px-3 hover:bg-red-50"
+                    >
+                      <Trash2 size={18} className="text-red-600" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Past works */}
+          <div className={cardClass}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-extrabold text-slate-900">
+                Past Works
+              </h3>
+              <button
+                type="button"
+                onClick={addPastWork}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 font-bold text-white hover:bg-slate-800 shadow"
+              >
+                <Plus size={18} />
+                Add Work
+              </button>
+            </div>
+
+            {(profile.pastWorks || []).length === 0 ? (
+              <p className="text-slate-500 text-sm">
+                Add projects/work history to build trust.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {(profile.pastWorks || []).map((w, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5"
+                  >
+                    <div className="flex gap-3">
+                      <input
+                        className="flex-1 rounded-xl ring-1 ring-black/10 px-3 py-2 font-bold bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Work title"
+                        value={w.title}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setProfile((prev) => {
+                            if (!prev) return prev;
+                            const works = [...(prev.pastWorks || [])];
+                            works[idx] = { ...works[idx], title: val };
+                            return { ...prev, pastWorks: works };
+                          });
+                        }}
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => removePastWork(idx)}
+                        className="rounded-xl bg-white ring-1 ring-black/10 px-3 py-2 hover:bg-red-50"
+                      >
+                        <Trash2 size={18} className="text-red-600" />
+                      </button>
+                    </div>
+
+                    <textarea
+                      className="mt-3 w-full rounded-xl ring-1 ring-black/10 p-3 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      rows={3}
+                      placeholder="Work description"
+                      value={w.description}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setProfile((prev) => {
+                          if (!prev) return prev;
+                          const works = [...(prev.pastWorks || [])];
+                          works[idx] = { ...works[idx], description: val };
+                          return { ...prev, pastWorks: works };
+                        });
+                      }}
+                    />
+
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <input
+                        className="rounded-xl ring-1 ring-black/10 px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Year (optional)"
+                        value={w.year || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setProfile((prev) => {
+                            if (!prev) return prev;
+                            const works = [...(prev.pastWorks || [])];
+                            works[idx] = { ...works[idx], year: val };
+                            return { ...prev, pastWorks: works };
+                          });
+                        }}
+                      />
+
+                      <div className="flex gap-2">
+                        <span className="inline-flex items-center gap-2 rounded-xl bg-white ring-1 ring-black/10 px-3 text-slate-700">
+                          <LinkIcon size={16} />
+                        </span>
+                        <input
+                          className="flex-1 rounded-xl ring-1 ring-black/10 px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Link (optional)"
+                          value={w.link || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setProfile((prev) => {
+                              if (!prev) return prev;
+                              const works = [...(prev.pastWorks || [])];
+                              works[idx] = { ...works[idx], link: val };
+                              return { ...prev, pastWorks: works };
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Location */}
+          <div className={cardClass}>
+            <h3 className="text-lg font-extrabold text-slate-900 mb-2">
+              Location (Required)
+            </h3>
+
+            {!hasCoords && (
+              <div className="mt-3 rounded-2xl bg-red-50 p-4 ring-1 ring-red-200">
+                <p className="font-bold text-red-700">Location required</p>
+                <p className="text-sm text-red-600 mt-1">
+                  Your profile will not be visible to clients until location is
+                  enabled.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={fetchLocation}
+                  disabled={locationStatus === "fetching"}
+                  className="mt-3 rounded-xl bg-red-600 px-5 py-2 text-white font-bold hover:bg-red-700 disabled:opacity-60 shadow"
+                >
+                  {locationStatus === "fetching"
+                    ? "Fetching..."
+                    : "Enable Location"}
+                </button>
+              </div>
+            )}
+
+            {hasCoords && (
+              <p className="text-slate-700 font-semibold mt-2">
+                📍 {profile.city || "Detected"}, {profile.country || ""}
+              </p>
+            )}
+
+            {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+          </div>
+        </div>
+
+        {/* RIGHT 20% */}
+        <div className="lg:col-span-3">
+          <div className="sticky top-6 space-y-4">
+            <div className={cardClass}>
+              <h3 className="text-lg font-extrabold text-slate-900 mb-3">
+                Reviews
+              </h3>
+
+              {loadingReviews ? (
+                <div className="flex items-center gap-2 text-slate-600">
+                  <Loader2 className="animate-spin" size={18} />
+                  Loading reviews...
+                </div>
+              ) : reviews.length === 0 ? (
+                <p className="text-sm text-slate-500">No reviews yet.</p>
+              ) : (
+                <div className="space-y-4">
+                  {reviews.slice(0, 10).map((r) => (
+                    <div
+                      key={r._id}
+                      className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="font-bold text-slate-800 text-sm">
+                          {r.clientName || "Anonymous"}
+                        </p>
+
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-100 px-2 py-1 text-xs font-bold text-amber-700">
+                          <Star size={14} fill="currentColor" />
+                          {r.rating}
+                        </span>
+                      </div>
+
+                      <p className="mt-2 text-sm text-slate-600 line-clamp-4">
+                        {r.comment || "No comment"}
+                      </p>
+
+                      <p className="mt-2 text-xs text-slate-400">
+                        {new Date(r.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm hover:shadow-md transition-all">
+              <h4 className="font-extrabold mb-2">Profile tips</h4>
+              <ul className="text-sm text-slate-200 space-y-1">
+                <li>• Add at least 5 skills</li>
+                <li>• Add 3 past works</li>
+                <li>• Strong bio increases bookings</li>
+              </ul>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -12853,6 +14945,29 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   return <UserProvider>{children}</UserProvider>;
 }
 
+--- FILE: ./client/utils/theme.ts ---
+
+export function setTheme(theme: "light" | "dark") {
+  if (typeof window === "undefined") return;
+
+  const root = document.documentElement; // <html>
+
+  if (theme === "dark") root.classList.add("dark");
+  else root.classList.remove("dark");
+
+  localStorage.setItem("theme", theme);
+}
+
+export function getTheme(): "light" | "dark" {
+  if (typeof window === "undefined") return "light";
+
+  const saved = localStorage.getItem("theme");
+  if (saved === "dark" || saved === "light") return saved;
+
+  // default
+  return "light";
+}
+
 --- FILE: ./client/utils/geolocation.ts ---
 
 /**
@@ -12876,12 +14991,13 @@ export function getCurrentLocation(): Promise<{
         });
       },
       (error) => {
+        console.log("Geo error:", error.code, error.message);
         reject(error);
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
+        timeout: 60000,
+        maximumAge: 60000,
       },
     );
   });
@@ -12951,7 +15067,7 @@ export default function SearchResults({ results = [] }) {
             {/* 🧠 Freelancer Info */}
             <div>
               <h2 className="text-xl font-semibold text-gray-800 mb-1">
-                {f.name}
+                {f.userName || f.name || "Freelancer"}
               </h2>
               <p className="text-sm text-gray-600 mb-1">
                 {f.skills?.length ? f.skills.join(", ") : "No skills listed"}
@@ -12967,7 +15083,7 @@ export default function SearchResults({ results = [] }) {
 
             {/* ✅ View Freelancer Button */}
             <button
-              onClick={() => router.push(`/freelancer/${f._id}`)}
+              onClick={() => router.push(`/f/${f._id}`)}
               className="mt-4 bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 transition"
             >
               View Freelancer
@@ -12976,6 +15092,9 @@ export default function SearchResults({ results = [] }) {
         ))}
       </div>
     </div>
+    <div className="p-6 bg-white text-black dark:bg-slate-950 dark:text-white">
+  Dark mode test
+</div>
   );
 }
 
@@ -13068,6 +15187,22 @@ export default function ReviewModal({ bookingId, onClose }) {
     </div>
   );
 }
+--- FILE: ./client/components/HeaderWrapper.tsx ---
+
+"use client";
+
+import { usePathname } from "next/navigation";
+import Header from "@/components/Header";
+
+export default function HeaderWrapper() {
+  const pathname = usePathname();
+
+  // ✅ Hide header in dashboard routes
+  if (pathname?.startsWith("/dashboard")) return null;
+
+  return <Header />;
+}
+
 --- FILE: ./client/components/FreelancerCalendar.tsx ---
 
 "use client";
@@ -13104,14 +15239,31 @@ export default function FreelancerCalendar({
   );
 }
 
+--- FILE: ./client/components/ThemeInit.tsx ---
+
+"use client";
+
+import { useEffect } from "react";
+import { getTheme, setTheme } from "@/utils/theme";
+
+export default function ThemeInit() {
+  useEffect(() => {
+    const theme = getTheme(); // "light" | "dark"
+    setTheme(theme); // ✅ applies html.dark
+  }, []);
+
+  return null;
+}
+
 --- FILE: ./client/components/MyBookingsPage.tsx ---
 
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
 import ReviewModal from "@/components/ReviewModal";
+import { useUser } from "@/context/UserContext";
 import {
   Calendar,
   Clock,
@@ -13120,33 +15272,76 @@ import {
   Briefcase,
   CheckCircle,
   XCircle,
+  BadgeCheck,
 } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-import { useUser } from "@/context/UserContext";
 
-interface Booking {
+type BookingStatus = "pending" | "confirmed" | "completed" | "cancelled";
+
+type Booking = {
   _id: string;
   serviceType: string;
   preferredDate: string;
   preferredTime: string;
-  status: "pending" | "confirmed" | "completed" | "cancelled";
+  status: BookingStatus;
+
+  // optional fields (older records may miss these)
+  startTime?: string;
+  endTime?: string;
+  estimatedDurationMinutes?: number;
+
+  clientId?: {
+    name?: string;
+    email?: string;
+  };
+};
+
+function statusBadge(status: BookingStatus) {
+  switch (status) {
+    case "completed":
+      return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100";
+    case "confirmed":
+      return "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100";
+    case "cancelled":
+      return "bg-red-50 text-red-700 ring-1 ring-red-100";
+    default:
+      return "bg-blue-50 text-blue-700 ring-1 ring-blue-100";
+  }
 }
 
-// Keep this named 'cn'
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
+function formatDate(d: string | undefined) {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return d;
+  return dt.toLocaleDateString(undefined, { dateStyle: "medium" });
 }
 
-// Ensure this is the ONLY 'MyBookingsPage' declaration in the file
 export default function MyBookingsPage() {
   const router = useRouter();
   const { user } = useUser();
 
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [showReview, setShowReview] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState<string | null>(null);
+
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [toast, setToast] = useState("");
+
+  const stats = useMemo(() => {
+    return {
+      pending: bookings.filter((b) => b.status === "pending").length,
+      confirmed: bookings.filter((b) => b.status === "confirmed").length,
+      completed: bookings.filter((b) => b.status === "completed").length,
+    };
+  }, [bookings]);
+
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(""), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
 
   useEffect(() => {
     const fetchBookings = async () => {
@@ -13154,9 +15349,7 @@ export default function MyBookingsPage() {
         const res = await api.get("/bookings/mybookings");
         setBookings(res.data.data || []);
       } catch (err: any) {
-        if (err.response?.status === 401) {
-          router.push("/login");
-        }
+        if (err.response?.status === 401) router.push("/login");
       } finally {
         setLoading(false);
       }
@@ -13169,104 +15362,176 @@ export default function MyBookingsPage() {
     bookingId: string,
     status: "confirmed" | "completed" | "cancelled",
   ) => {
-    await api.patch(`/bookings/${bookingId}/status`, { status });
+    try {
+      setActionLoading(`${bookingId}:${status}`);
 
-    setBookings((prev) =>
-      prev.map((b) => (b._id === bookingId ? { ...b, status } : b)),
-    );
+      await api.patch(`/bookings/${bookingId}/status`, { status });
+
+      setBookings((prev) =>
+        prev.map((b) => (b._id === bookingId ? { ...b, status } : b)),
+      );
+
+      setToast(`Booking updated → ${status}`);
+    } catch (err: any) {
+      setToast(err?.response?.data?.msg || "Failed to update booking status");
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4 text-slate-500">
-        <Loader2 className="animate-spin text-blue-600" size={40} />
-        <p className="font-medium">Loading your schedule...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-slate-500">
+        <Loader2 className="animate-spin text-blue-600" size={44} />
+        <p className="font-bold">Loading your bookings…</p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      <header className="mb-10">
-        <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">
-          My Bookings
-        </h1>
-        <p className="text-slate-500 mt-2">
-          View and manage your service history.
-        </p>
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-6 right-6 z-50 rounded-2xl bg-slate-900 px-5 py-3 text-white font-extrabold shadow-lg">
+          {toast}
+        </div>
+      )}
+
+      {/* Header */}
+      <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-950/80 backdrop-blur border-b border-slate-200 dark:border-white/10">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+          <div>
+            <h1 className="text-4xl font-extrabold tracking-tight">
+              My Bookings
+            </h1>
+            <p className="text-slate-200 mt-2 font-semibold">
+              Manage pending requests, confirmed jobs and completed history.
+            </p>
+          </div>
+
+          {/* Stats badges */}
+          <div className="flex flex-wrap gap-3">
+            <span className="rounded-full bg-white/10 px-4 py-2 text-sm font-extrabold">
+              Pending: {stats.pending}
+            </span>
+            <span className="rounded-full bg-white/10 px-4 py-2 text-sm font-extrabold">
+              Confirmed: {stats.confirmed}
+            </span>
+            <span className="rounded-full bg-white/10 px-4 py-2 text-sm font-extrabold">
+              Completed: {stats.completed}
+            </span>
+          </div>
+        </div>
       </header>
 
+      {/* Empty state */}
       {bookings.length === 0 ? (
-        <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50">
-          <Briefcase className="mx-auto text-slate-300 mb-4" size={64} />
-          <p className="text-slate-500 text-xl font-medium">
-            No bookings found yet.
+        <div className="text-center py-20 ring-1 ring-black/5 rounded-3xl bg-white shadow-sm">
+          <Briefcase className="mx-auto text-slate-200 mb-4" size={70} />
+          <p className="text-slate-700 text-xl font-extrabold">
+            No bookings yet.
           </p>
+          <p className="text-slate-500 mt-2 font-semibold">
+            Once someone books you, it will appear here.
+          </p>
+
+          <button
+            onClick={() =>
+              router.push(
+                user?.role === "freelancer" ? "/freelancer/profile" : "/search",
+              )
+            }
+            className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-6 py-3 text-white font-extrabold hover:bg-blue-700"
+          >
+            <BadgeCheck size={18} />
+            {user?.role === "freelancer"
+              ? "Complete my profile"
+              : "Find freelancers"}
+          </button>
         </div>
       ) : (
-        <div className="grid gap-6">
+        <div className="grid gap-5">
           {bookings.map((b) => (
             <div
               key={b._id}
-              className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-all"
+              className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all"
             >
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                {/* Info */}
                 <div className="space-y-4">
                   <div className="flex items-center gap-3">
-                    <div className="bg-blue-50 text-blue-600 p-2.5 rounded-xl">
+                    <div className="bg-blue-50 text-blue-600 p-3 rounded-2xl">
                       <Briefcase size={24} />
                     </div>
-                    <h3 className="font-bold text-xl text-slate-800">
-                      {b.serviceType}
-                    </h3>
+                    <div>
+                      <h3 className="font-extrabold text-2xl text-slate-900">
+                        {b.serviceType}
+                      </h3>
+
+                      {/* show client name if freelancer is viewing */}
+                      {user?.role === "freelancer" && (
+                        <p className="text-sm text-slate-500 font-bold mt-1">
+                          Client: {b.clientId?.name || "Unknown"}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-5 text-sm font-medium text-slate-500">
-                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg">
+                  <div className="flex flex-wrap gap-4 text-sm font-bold text-slate-600">
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl">
                       <Calendar size={16} />
-                      {new Date(b.preferredDate).toLocaleDateString(undefined, {
-                        dateStyle: "medium",
-                      })}
+                      {formatDate(b.preferredDate)}
                     </div>
-                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg">
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl">
                       <Clock size={16} />
-                      {b.preferredTime}
+                      {b.preferredTime || "—"}
+                    </div>
+
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl">
+                      Duration:{" "}
+                      {typeof b.estimatedDurationMinutes === "number"
+                        ? `${b.estimatedDurationMinutes} mins`
+                        : "—"}
                     </div>
                   </div>
                 </div>
 
+                {/* Actions */}
                 <div className="flex flex-col items-end gap-4 w-full md:w-auto">
                   <span
-                    className={cn(
-                      "px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest border",
-                      b.status === "completed"
-                        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-                        : b.status === "confirmed"
-                          ? "bg-indigo-50 text-indigo-700 border-indigo-100"
-                          : b.status === "cancelled"
-                            ? "bg-red-50 text-red-700 border-red-100"
-                            : "bg-blue-50 text-blue-700 border-blue-100",
-                    )}
+                    className={`px-4 py-2 rounded-full text-xs font-extrabold uppercase tracking-widest ${statusBadge(
+                      b.status,
+                    )}`}
                   >
                     {b.status}
                   </span>
 
-                  {/* FREELANCER ACTIONS */}
+                  {/* Freelancer Actions */}
                   {user?.role === "freelancer" && b.status === "pending" && (
                     <div className="flex gap-3">
                       <button
                         onClick={() => updateStatus(b._id, "confirmed")}
-                        className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white text-sm font-bold rounded-xl hover:bg-emerald-600"
+                        disabled={actionLoading === `${b._id}:confirmed`}
+                        className="flex items-center gap-2 px-5 py-3 bg-emerald-600 text-white text-sm font-extrabold rounded-2xl hover:bg-emerald-700 disabled:opacity-60"
                       >
-                        <CheckCircle size={18} />
+                        {actionLoading === `${b._id}:confirmed` ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <CheckCircle size={18} />
+                        )}
                         Accept
                       </button>
 
                       <button
                         onClick={() => updateStatus(b._id, "cancelled")}
-                        className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white text-sm font-bold rounded-xl hover:bg-red-600"
+                        disabled={actionLoading === `${b._id}:cancelled`}
+                        className="flex items-center gap-2 px-5 py-3 bg-red-600 text-white text-sm font-extrabold rounded-2xl hover:bg-red-700 disabled:opacity-60"
                       >
-                        <XCircle size={18} />
+                        {actionLoading === `${b._id}:cancelled` ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <XCircle size={18} />
+                        )}
                         Reject
                       </button>
                     </div>
@@ -13275,21 +15540,26 @@ export default function MyBookingsPage() {
                   {user?.role === "freelancer" && b.status === "confirmed" && (
                     <button
                       onClick={() => updateStatus(b._id, "completed")}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl hover:bg-blue-700"
+                      disabled={actionLoading === `${b._id}:completed`}
+                      className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white text-sm font-extrabold rounded-2xl hover:bg-blue-700 disabled:opacity-60"
                     >
-                      <CheckCircle size={18} />
+                      {actionLoading === `${b._id}:completed` ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <CheckCircle size={18} />
+                      )}
                       Mark Completed
                     </button>
                   )}
 
-                  {/* CLIENT REVIEW */}
+                  {/* Client Review */}
                   {user?.role === "client" && b.status === "completed" && (
                     <button
                       onClick={() => {
                         setSelectedBooking(b._id);
                         setShowReview(true);
                       }}
-                      className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 text-white text-sm font-bold rounded-xl hover:bg-amber-600 shadow-lg shadow-amber-100"
+                      className="flex items-center gap-2 px-6 py-3 bg-amber-500 text-white text-sm font-extrabold rounded-2xl hover:bg-amber-600 shadow-lg shadow-amber-100"
                     >
                       <Star size={18} fill="currentColor" />
                       Leave Review
@@ -13302,6 +15572,7 @@ export default function MyBookingsPage() {
         </div>
       )}
 
+      {/* Review Modal */}
       {showReview && selectedBooking && (
         <ReviewModal
           bookingId={selectedBooking}
@@ -13434,6 +15705,484 @@ export default function MapSearchPage() {
   );
 }
 
+--- FILE: ./client/components/DashboardHeader.tsx ---
+
+"use client";
+
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useUser } from "@/context/UserContext";
+import api from "@/services/api";
+import { setTheme as applyTheme, getTheme } from "@/utils/theme";
+
+import {
+  LayoutDashboard,
+  CalendarDays,
+  Briefcase,
+  Search as SearchIcon,
+  LogOut,
+  ChevronDown,
+  Repeat,
+  User as UserIcon,
+  Menu,
+  X,
+  Bell,
+} from "lucide-react";
+
+function NavLink({
+  href,
+  label,
+  icon,
+  onClick,
+}: {
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+  onClick?: () => void;
+}) {
+  const pathname = usePathname();
+  const active = pathname === href || pathname.startsWith(href + "/");
+
+  return (
+    <Link
+      href={href}
+      onClick={onClick}
+      className={[
+        "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-extrabold transition",
+        active
+          ? "bg-slate-900 text-white shadow"
+          : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900",
+      ].join(" ")}
+    >
+      {icon}
+      {label}
+    </Link>
+  );
+}
+
+export default function DashboardHeader() {
+  const { user, logout } = useUser();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ✅ Theme state (fixed)
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  // ✅ Search state
+  const [search, setSearch] = useState("");
+
+  // ✅ Notifications
+  const [showNotifications, setShowNotifications] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  // ✅ Load theme on mount
+  useEffect(() => {
+    const t = getTheme(); // reads localStorage
+    setTheme(t);
+    applyTheme(t); // ensures html.dark is correctly applied
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next); // ✅ update UI state
+    applyTheme(next); // ✅ updates <html class="dark">
+  };
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      )
+        setMenuOpen(false);
+
+      if (notifRef.current && !notifRef.current.contains(e.target as Node))
+        setShowNotifications(false);
+    };
+
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  useEffect(() => {
+    setMobileOpen(false);
+    setMenuOpen(false);
+    setShowNotifications(false);
+  }, [pathname]);
+
+  const links = useMemo(() => {
+    if (!user) return [];
+
+    if (user.role === "freelancer") {
+      return [
+        {
+          label: "Dashboard",
+          href: "/dashboard/freelancer",
+          icon: <LayoutDashboard size={18} />,
+        },
+        {
+          label: "My Profile",
+          href: "/freelancer/profile",
+          icon: <Briefcase size={18} />,
+        },
+        {
+          label: "Bookings",
+          href: "/bookings",
+          icon: <CalendarDays size={18} />,
+        },
+      ];
+    }
+
+    return [
+      {
+        label: "Dashboard",
+        href: "/dashboard/client",
+        icon: <LayoutDashboard size={18} />,
+      },
+      {
+        label: "Search",
+        href: "/search",
+        icon: <SearchIcon size={18} />,
+      },
+      {
+        label: "Bookings",
+        href: "/bookings",
+        icon: <CalendarDays size={18} />,
+      },
+    ];
+  }, [user]);
+
+  if (!user) return null;
+
+  const handleLogout = async () => {
+    setMenuOpen(false);
+    await logout();
+    router.replace("/login");
+  };
+
+  const handleSwitchRole = async () => {
+    try {
+      setMenuOpen(false);
+      setMobileOpen(false);
+
+      const newRole = user.role === "client" ? "freelancer" : "client";
+      await api.post("/auth/switch-role", { role: newRole });
+
+      window.location.href = "/dashboard";
+    } catch (err) {
+      console.error("Switch role failed:", err);
+      alert("Failed to switch role. Try again.");
+    }
+  };
+
+  const goToProfile = () => {
+    setMenuOpen(false);
+    setMobileOpen(false);
+
+    if (user.role === "freelancer") router.push("/freelancer/profile");
+    else router.push("/dashboard/client");
+  };
+
+  const handleSearch = () => {
+    const q = search.trim();
+    if (!q) return;
+
+    if (user.role === "client")
+      router.push(`/search?skills=${encodeURIComponent(q)}`);
+
+    if (user.role === "freelancer")
+      router.push(`/bookings?q=${encodeURIComponent(q)}`);
+  };
+
+  return (
+    <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-950/80 backdrop-blur border-b border-slate-200 dark:border-white/10">
+      <div className="w-full px-4 sm:px-6 lg:px-12 py-4 flex items-center justify-between gap-4">
+        {/* Brand */}
+        <Link href="/" className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black dark:bg-white dark:text-slate-900">
+            P
+          </div>
+          <div className="leading-tight">
+            <p className="font-black text-slate-900 dark:text-white">
+              PocketLancer
+            </p>
+            <p className="text-xs font-bold text-slate-500 capitalize dark:text-slate-400">
+              {user.role} dashboard
+            </p>
+          </div>
+        </Link>
+
+        {/* Desktop nav */}
+        <nav className="hidden lg:flex items-center gap-2">
+          {links.map((l) => (
+            <NavLink key={l.href} href={l.href} label={l.label} icon={l.icon} />
+          ))}
+        </nav>
+
+        {/* Search bar */}
+        <div className="hidden xl:flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm dark:bg-slate-900 dark:border-slate-800">
+          <SearchIcon
+            size={18}
+            className="text-slate-500 dark:text-slate-300"
+          />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSearch();
+            }}
+            placeholder={
+              user.role === "client"
+                ? "Search skills (ex: electrician)..."
+                : "Search bookings..."
+            }
+            className="w-72 bg-transparent outline-none text-sm font-bold text-slate-800 placeholder:text-slate-400 dark:text-white"
+          />
+          <button
+            onClick={handleSearch}
+            className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900"
+          >
+            Search
+          </button>
+        </div>
+
+        {/* Right controls */}
+        <div className="flex items-center gap-3">
+          {/* Mobile menu */}
+          <button
+            className="lg:hidden rounded-xl border px-3 py-2 font-extrabold hover:bg-slate-50 inline-flex items-center gap-2 dark:border-slate-800 dark:hover:bg-slate-900"
+            onClick={() => setMobileOpen(true)}
+          >
+            <Menu size={18} className="dark:text-white" />
+          </button>
+
+          {/* ✅ Theme toggle (fixed + styled) */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="rounded-xl border px-3 py-2 font-extrabold hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-white/10"
+            title="Toggle theme"
+          >
+            {theme === "dark" ? "🌙" : "☀️"}
+          </button>
+
+          {/* Notifications */}
+          <div className="relative" ref={notifRef}>
+            <button
+              onClick={() => setShowNotifications((s) => !s)}
+              className="rounded-xl border px-3 py-2 hover:bg-slate-50 relative dark:border-slate-800 dark:hover:bg-slate-900"
+              title="Notifications"
+            >
+              <Bell size={18} className="dark:text-white" />
+              <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-red-500" />
+            </button>
+
+            {showNotifications && (
+              <div className="absolute right-0 mt-3 w-80 rounded-2xl border bg-white shadow-xl overflow-hidden z-50 dark:bg-slate-950 dark:border-slate-800">
+                <div className="px-4 py-3 border-b dark:border-slate-800">
+                  <p className="font-black text-slate-900 dark:text-white">
+                    Notifications
+                  </p>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                    Latest updates & reminders
+                  </p>
+                </div>
+
+                <div className="p-3 space-y-2">
+                  <div className="rounded-xl border px-4 py-3 dark:border-slate-800">
+                    <p className="text-sm font-black text-slate-900 dark:text-white">
+                      Welcome 🎉
+                    </p>
+                    <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1">
+                      Complete your profile to get more bookings.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border px-4 py-3 dark:border-slate-800">
+                    <p className="text-sm font-black text-slate-900 dark:text-white">
+                      Tip
+                    </p>
+                    <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1">
+                      Reviews increase trust — ask your client after completion.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="px-4 py-3 border-t dark:border-slate-800">
+                  <button
+                    onClick={() => setShowNotifications(false)}
+                    className="w-full rounded-xl bg-slate-900 py-2 text-xs font-black text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* User dropdown */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={() => setMenuOpen((s) => !s)}
+              className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 shadow-sm hover:bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:hover:bg-slate-900"
+            >
+              <span className="h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center font-black text-xs dark:bg-white dark:text-slate-900">
+                {(user.name || "U").slice(0, 1).toUpperCase()}
+              </span>
+
+              <div className="hidden sm:block text-left leading-tight">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-black text-slate-900 dark:text-white">
+                    {user.name}
+                  </p>
+                  <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    {user.role}
+                  </span>
+                </div>
+
+                <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                  {user.email}
+                </p>
+              </div>
+
+              <ChevronDown
+                size={16}
+                className="text-slate-500 dark:text-slate-300"
+              />
+            </button>
+
+            {menuOpen && (
+              <div className="absolute right-0 mt-3 w-56 overflow-hidden rounded-2xl border bg-white shadow-xl z-50 dark:bg-slate-950 dark:border-slate-800">
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    router.push("/dashboard");
+                  }}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                >
+                  <LayoutDashboard size={16} />
+                  Dashboard
+                </button>
+
+                <button
+                  onClick={goToProfile}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                >
+                  <UserIcon size={16} />
+                  My Profile
+                </button>
+
+                <button
+                  onClick={handleSwitchRole}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                >
+                  <Repeat size={16} />
+                  Switch Role
+                </button>
+
+                <div className="h-px bg-slate-100 dark:bg-slate-800" />
+
+                <button
+                  onClick={handleLogout}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-black text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+                >
+                  <LogOut size={16} />
+                  Logout
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile Drawer */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setMobileOpen(false)}
+          />
+          <div className="absolute right-0 top-0 h-full w-80 bg-white shadow-2xl border-l p-6 dark:bg-slate-950 dark:border-slate-800">
+            <div className="flex items-center justify-between mb-6">
+              <p className="font-black text-slate-900 dark:text-white">Menu</p>
+              <button
+                onClick={() => setMobileOpen(false)}
+                className="rounded-xl border p-2 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
+              >
+                <X size={18} className="dark:text-white" />
+              </button>
+            </div>
+
+            {/* Search mobile */}
+            <div className="mb-5 flex items-center gap-2 rounded-2xl border px-3 py-2 dark:border-slate-800">
+              <SearchIcon
+                size={18}
+                className="text-slate-500 dark:text-slate-300"
+              />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSearch();
+                }}
+                placeholder={
+                  user.role === "client"
+                    ? "Search skills..."
+                    : "Search bookings..."
+                }
+                className="flex-1 bg-transparent outline-none text-sm font-bold text-slate-800 placeholder:text-slate-400 dark:text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              {links.map((l) => (
+                <NavLink
+                  key={l.href}
+                  href={l.href}
+                  label={l.label}
+                  icon={l.icon}
+                  onClick={() => setMobileOpen(false)}
+                />
+              ))}
+            </div>
+
+            <div className="mt-8 space-y-2">
+              <button
+                onClick={goToProfile}
+                className="w-full rounded-2xl border px-4 py-3 font-extrabold text-slate-800 hover:bg-slate-50 flex items-center gap-3 dark:border-slate-800 dark:text-white dark:hover:bg-slate-900"
+              >
+                <UserIcon size={18} />
+                My Profile
+              </button>
+
+              <button
+                onClick={handleSwitchRole}
+                className="w-full rounded-2xl border px-4 py-3 font-extrabold text-slate-800 hover:bg-slate-50 flex items-center gap-3 dark:border-slate-800 dark:text-white dark:hover:bg-slate-900"
+              >
+                <Repeat size={18} />
+                Switch Role
+              </button>
+
+              <button
+                onClick={handleLogout}
+                className="w-full rounded-2xl bg-red-600 px-4 py-3 font-extrabold text-white hover:bg-red-700 transition flex items-center gap-3 justify-center"
+              >
+                <LogOut size={18} />
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </header>
+  );
+}
+
 --- FILE: ./client/components/Header.tsx ---
 
 "use client";
@@ -13443,15 +16192,23 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
-import { LogOut, User as UserIcon, ChevronDown, Repeat } from "lucide-react";
+import {
+  LogOut,
+  User as UserIcon,
+  ChevronDown,
+  Repeat,
+  LayoutDashboard,
+} from "lucide-react";
 
 export default function Header() {
-  const { user, logout, refreshUser } = useUser();
+  const { user, logout } = useUser();
   const router = useRouter();
+  const pathname = usePathname();
+
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const pathname = usePathname();
-  const isOnDashboard = pathname === "/dashboard";
+
+  const isDashboardRoute = pathname.startsWith("/dashboard");
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -13465,125 +16222,165 @@ export default function Header() {
   }, []);
 
   const handleLogout = async () => {
+    setOpen(false);
     await logout();
     router.replace("/login");
   };
 
   /**
-   * ✅ CORRECT SWITCH ROLE LOGIC
-   * - Switch role on backend
-   * - Always return to /dashboard
+   * ✅ Switch Role
+   * - calls backend to change user.role
+   * - then reload to refresh session + user context
    */
   const handleSwitchRole = async () => {
     try {
-      const newRole = user?.role === "client" ? "freelancer" : "client";
+      if (!user) return;
+
+      setOpen(false);
+
+      const newRole = user.role === "client" ? "freelancer" : "client";
 
       await api.post("/auth/switch-role", { role: newRole });
 
-      // hard reload to rehydrate UserContext
+      // ✅ hard reload to refresh UserContext cleanly
       window.location.href = "/dashboard";
     } catch (err) {
       console.error("Switch role failed", err);
+      alert("Failed to switch role. Try again.");
     }
+  };
+
+  const goToDashboard = () => {
+    if (!user) return;
+    router.push("/dashboard");
   };
 
   const goToProfile = () => {
     setOpen(false);
 
     if (user?.role === "freelancer") {
-      router.push("/freelancer/profile/");
+      router.push("/freelancer/profile");
     } else {
-      router.push("/dashboard");
+      router.push("/dashboard/client");
     }
   };
 
   return (
-    <header className="bg-white border-b border-slate-200 py-4 px-8 flex justify-between items-center">
-      {/* Logo */}
-      <Link href="/" className="text-xl font-bold text-slate-900">
-        PocketLancer
-      </Link>
-
-      {/* Right Section */}
-      <div className="flex items-center gap-6">
-        {/* Logged OUT */}
-        {!user && (
-          <div className="flex items-center gap-4">
-            <Link
-              href="/login"
-              className="text-sm font-semibold text-slate-600 hover:text-slate-900"
-            >
-              Login
-            </Link>
-            <Link
-              href="/register"
-              className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-800 transition-colors"
-            >
-              Join Now
-            </Link>
+    <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-950/80 backdrop-blur border-b border-slate-200 dark:border-white/10">
+      <div className="w-full px-4 sm:px-6 lg:px-10 py-4 flex items-center justify-between">
+        {/* Left */}
+        <Link href="/" className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black">
+            P
           </div>
-        )}
+          <div className="leading-tight">
+            <p className="font-black text-slate-900">PocketLancer</p>
+            <p className="text-xs font-bold text-slate-500">
+              Hire trusted freelancers
+            </p>
+          </div>
+        </Link>
 
-        {/* Logged IN */}
-        {user && (
-          <div className="flex items-center gap-4">
-            {/* DASHBOARD CTA (hidden on dashboard page) */}
-            {!isOnDashboard && (
-              <button
-                onClick={() => router.push("/dashboard")}
-                className="relative overflow-hidden rounded-xl bg-brand-primary px-5 py-2.5 text-sm font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+        {/* Right */}
+        <div className="flex items-center gap-4">
+          {/* Logged OUT */}
+          {!user && (
+            <div className="flex items-center gap-3">
+              <Link
+                href="/login"
+                className="text-sm font-semibold text-slate-700 hover:text-slate-900"
               >
-                <span className="absolute inset-0 bg-gradient-to-r from-blue-500 to-indigo-600 opacity-0 transition-opacity hover:opacity-100" />
-                <span className="relative">
-                  Go to{" "}
-                  {user.role === "client"
-                    ? "Client Dashboard"
-                    : "Freelancer Dashboard"}
-                </span>
-              </button>
-            )}
-
-            {/* ACCOUNT DROPDOWN */}
-            <div className="relative" ref={menuRef}>
-              <button
-                onClick={() => setOpen(!open)}
-                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                Login
+              </Link>
+              <Link
+                href="/register"
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 transition"
               >
-                <UserIcon size={16} />
-                {user.name}
-                <ChevronDown size={16} />
-              </button>
-
-              {open && (
-                <div className="absolute right-0 mt-2 w-48 rounded-xl border bg-white shadow-lg overflow-hidden z-50">
-                  <button
-                    onClick={goToProfile}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-slate-50"
-                  >
-                    <UserIcon size={16} />
-                    My Profile
-                  </button>
-
-                  <button
-                    onClick={handleSwitchRole}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-slate-50"
-                  >
-                    <Repeat size={16} />
-                    Switch Role
-                  </button>
-
-                  <button
-                    onClick={handleLogout}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50"
-                  >
-                    <LogOut size={16} />
-                    Sign Out
-                  </button>
-                </div>
-              )}
+                Join Now
+              </Link>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Logged IN */}
+          {user && (
+            <>
+              {/* Dashboard CTA only on non-dashboard pages */}
+              {!isDashboardRoute && (
+                <button
+                  onClick={goToDashboard}
+                  className="rounded-xl bg-brand-primary px-5 py-2.5 text-sm font-black text-white shadow hover:shadow-md transition"
+                >
+                  Go to Dashboard
+                </button>
+              )}
+
+              {/* Dropdown */}
+              <div className="relative" ref={menuRef}>
+                <button
+                  onClick={() => setOpen((s) => !s)}
+                  className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 shadow-sm hover:bg-slate-50"
+                >
+                  <span className="h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center font-black">
+                    {user.name?.[0]?.toUpperCase() || "U"}
+                  </span>
+
+                  <div className="text-left leading-tight">
+                    <p className="text-sm font-black text-slate-900">
+                      {user.name}
+                    </p>
+                    <p className="text-xs font-bold text-slate-500">
+                      {user.email}
+                    </p>
+                  </div>
+
+                  <ChevronDown size={16} className="text-slate-500" />
+                </button>
+
+                {open && (
+                  <div className="absolute right-0 mt-3 w-56 overflow-hidden rounded-2xl border bg-white shadow-xl z-50">
+                    <button
+                      onClick={() => {
+                        setOpen(false);
+                        router.push("/dashboard");
+                      }}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50"
+                    >
+                      <LayoutDashboard size={16} />
+                      Dashboard
+                    </button>
+
+                    <button
+                      onClick={goToProfile}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50"
+                    >
+                      <UserIcon size={16} />
+                      My Profile
+                    </button>
+
+                    {/* ✅ SWITCH ROLE */}
+                    <button
+                      onClick={handleSwitchRole}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50"
+                    >
+                      <Repeat size={16} />
+                      Switch Role
+                    </button>
+
+                    <div className="h-px bg-slate-100" />
+
+                    <button
+                      onClick={handleLogout}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-sm font-black text-red-600 hover:bg-red-50"
+                    >
+                      <LogOut size={16} />
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </header>
   );
@@ -13614,8 +16411,7 @@ export default function FreelancerCard({ freelancer }: { freelancer: any }) {
 
       {/* ✅ VIEW PROFILE BUTTON */}
       <button
-        // ✅ CORRECT
-        onClick={() => router.push(`/freelancer/${freelancer._id}`)}
+        onClick={() => router.push(`/f/${freelancer._id}`)}
         className="mt-4 w-full rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
       >
         View Profile
@@ -20536,6 +23332,15 @@ export default api;
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "res.cloudinary.com",
+      },
+    ],
+  },
+
   async rewrites() {
     return [
       {

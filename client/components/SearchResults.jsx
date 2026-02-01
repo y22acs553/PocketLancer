@@ -27,7 +27,7 @@ export default function SearchResults({ results = [] }) {
             {/* 🧠 Freelancer Info */}
             <div>
               <h2 className="text-xl font-semibold text-gray-800 mb-1">
-                {f.name}
+                {f.userName || f.name || "Freelancer"}
               </h2>
               <p className="text-sm text-gray-600 mb-1">
                 {f.skills?.length ? f.skills.join(", ") : "No skills listed"}
@@ -43,7 +43,7 @@ export default function SearchResults({ results = [] }) {
 
             {/* ✅ View Freelancer Button */}
             <button
-              onClick={() => router.push(`/freelancer/${f._id}`)}
+              onClick={() => router.push(`/f/${f._id}`)}
               className="mt-4 bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 transition"
             >
               View Freelancer
@@ -52,5 +52,8 @@ export default function SearchResults({ results = [] }) {
         ))}
       </div>
     </div>
+    <div className="p-6 bg-white text-black dark:bg-slate-950 dark:text-white">
+  Dark mode test
+</div>
   );
 }

@@ -53,6 +53,7 @@ const FreelancerSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    profilePic: { type: String, default: "" },
 
     hourlyRate: {
       type: Number,
@@ -63,7 +64,7 @@ const FreelancerSchema = new mongoose.Schema(
     // 🔴 GEO LOCATION (CORE FEATURE)
     location: {
       type: GeoPointSchema,
-      required: true,
+      required: false,
     },
 
     // Stored for UX / display only

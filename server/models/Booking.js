@@ -41,6 +41,9 @@ const BookingSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    preferredDate: { type: String, required: true },
+    preferredTime: { type: String, required: true },
+    serviceType: { type: String, required: true },
 
     address: {
       type: String,

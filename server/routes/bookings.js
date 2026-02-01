@@ -9,16 +9,21 @@ const router = express.Router();
 /* ======================================================
    ✅ HELPER: Get Service Duration
    ====================================================== */
-const getServiceDuration = (serviceType) => {
-  // fallback duration: 60 minutes
+
+function getServiceDuration(serviceType) {
   if (!serviceType) return 60;
 
-  // If constant is like { plumbing: 60, electrician: 45 }
-  const duration = SERVICE_DURATIONS?.[serviceType];
+  const key = serviceType.trim().toLowerCase();
 
-  // if not found, return 60 mins
-  return typeof duration === "number" ? duration : 60;
-};
+  // SERVICE_DURATIONS should be something like:
+  // { plumbing: 60, electrician: 45, ... }
+  if (SERVICE_DURATIONS && SERVICE_DURATIONS[key]) {
+    return SERVICE_DURATIONS[key];
+  }
+
+  // default fallback
+  return 60;
+}
 
 /* ======================================================
    1️⃣ CREATE BOOKING (CLIENT)

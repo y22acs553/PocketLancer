@@ -6,6 +6,7 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import path from "path";
+import uploadRoutes from "./routes/uploads.js";
 import { fileURLToPath } from "url";
 
 // ======================================================
@@ -85,6 +86,7 @@ app.use("/api/freelancers", freelancerRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/client", clientRoutes);
 app.use("/api/reviews", reviewRoutes);
+app.use("/api/uploads", uploadRoutes);
 
 // ======================================================
 // 8️⃣ HEALTH CHECK

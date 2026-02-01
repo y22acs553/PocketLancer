@@ -2,6 +2,8 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import { protect } from "../middleware/auth.js";
+import crypto from "crypto";
+import { sendPasswordResetEmail } from "../utils/emailUtils.js";
 
 const router = express.Router();
 
@@ -49,6 +51,20 @@ router.post("/register", async (req, res) => {
       password,
       role: role === "freelancer" ? "freelancer" : "client",
     });
+    if (user.role === "freelancer") {
+      const existing = await Freelancer.findOne({ user: user._id });
+
+      if (!existing) {
+        await Freelancer.create({
+          user: user._id,
+          name: user.name,
+          email: user.email,
+          profilePic: "",
+          rating: 0,
+          ratingCount: 0,
+        });
+      }
+    }
 
     await user.save();
 
@@ -174,6 +190,71 @@ router.post("/switch-role", protect, async (req, res) => {
   } catch (err) {
     console.error("❌ SWITCH ROLE ERROR:", err);
     res.status(500).json({ msg: "Failed to switch role" });
+  }
+});
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+
+    // ✅ Always return same message
+    if (!user) {
+      return res.json({
+        success: true,
+        msg: "If email exists, reset link sent.",
+      });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const hashed = crypto.createHash("sha256").update(resetToken).digest("hex");
+
+    user.passwordResetToken = hashed;
+    user.passwordResetExpires = Date.now() + 15 * 60 * 1000;
+    await user.save();
+
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
+
+    await sendPasswordResetEmail(user.email, resetUrl);
+
+    return res.json({
+      success: true,
+      msg: "If email exists, reset link sent.",
+    });
+  } catch (err) {
+    console.error("FORGOT PASSWORD ERROR:", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+});
+router.post("/reset-password", async (req, res) => {
+  const { token, password } = req.body;
+
+  try {
+    if (!token || !password) {
+      return res.status(400).json({ msg: "Token and password required." });
+    }
+
+    const hashed = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await User.findOne({
+      passwordResetToken: hashed,
+      passwordResetExpires: { $gt: Date.now() },
+    }).select("+password");
+
+    if (!user) {
+      return res.status(400).json({ msg: "Invalid or expired token." });
+    }
+
+    user.password = password; // ✅ will be hashed by pre-save hook
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+
+    await user.save();
+
+    return res.json({ success: true, msg: "Password reset successful." });
+  } catch (err) {
+    console.error("RESET PASSWORD ERROR:", err);
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 

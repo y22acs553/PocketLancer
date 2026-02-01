@@ -12,6 +12,7 @@ const router = express.Router();
 function isValidCoordinates(latitude, longitude) {
   if (typeof latitude !== "number" || typeof longitude !== "number")
     return false;
+  if (Number.isNaN(latitude) || Number.isNaN(longitude)) return false;
   if (latitude < -90 || latitude > 90) return false;
   if (longitude < -180 || longitude > 180) return false;
   if (latitude === 0 && longitude === 0) return false;
@@ -24,16 +25,27 @@ function isValidCoordinates(latitude, longitude) {
 
 router.get("/me", protect, authorize("freelancer"), async (req, res) => {
   try {
-    const profile = await Freelancer.findOne({ user: req.user._id });
+    let profile = await Freelancer.findOne({ user: req.user._id });
+
+    // ✅ auto-create minimal profile (no location yet)
     if (!profile) {
-      return res.status(404).json({
-        msg: "Freelancer profile not created yet",
+      profile = await Freelancer.create({
+        user: req.user._id,
+        title: "",
+        bio: "",
+        skills: [],
+        profilePic: "",
+        hourlyRate: 0,
+        city: "",
+        country: "",
+        // location intentionally not set here
       });
     }
-    res.json({ success: true, profile });
+
+    return res.json({ success: true, profile });
   } catch (err) {
     console.error("❌ GET /me ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -48,8 +60,12 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       longitude,
       city,
       country,
+      profilePic,
+      portfolio,
+      pastWorks,
     } = req.body;
 
+    // ✅ enforce location mandatory when saving profile
     if (!isValidCoordinates(latitude, longitude)) {
       return res.status(400).json({
         msg: "Valid GPS location is required",
@@ -65,6 +81,9 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
         hourlyRate,
         city,
         country,
+        profilePic,
+        portfolio,
+        pastWorks,
         location: {
           type: "Point",
           coordinates: [longitude, latitude],
@@ -73,15 +92,15 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       { new: true, upsert: true },
     );
 
-    res.json({ success: true, profile });
+    return res.json({ success: true, profile });
   } catch (err) {
     console.error("❌ UPDATE PROFILE ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
 /* =====================================================
-   GEO + SKILLS SEARCH (SELF EXCLUDED – FINAL FIX)
+   GEO + SKILLS SEARCH (SELF EXCLUDED)
    ===================================================== */
 
 router.get("/search", protect, async (req, res) => {
@@ -103,8 +122,10 @@ router.get("/search", protect, async (req, res) => {
       });
     }
 
+    // ✅ Only show freelancers who have real location
     const geoQuery = {
-      "location.coordinates": { $ne: [0, 0] },
+      "location.coordinates.0": { $exists: true },
+      "location.coordinates.1": { $exists: true },
     };
 
     if (skillsQuery.length > 0) {
@@ -142,6 +163,7 @@ router.get("/search", protect, async (req, res) => {
           hourlyRate: 1,
           city: 1,
           country: 1,
+          profilePic: 1,
           distanceKm: {
             $round: [{ $divide: ["$distanceMeters", 1000] }, 2],
           },
@@ -151,15 +173,15 @@ router.get("/search", protect, async (req, res) => {
       },
     ]);
 
-    // ✅ FINAL FILTER (SAFE & RELIABLE)
+    // ✅ exclude self
     const filtered = freelancers.filter(
       (f) => f.userId.toString() !== req.user._id.toString(),
     );
 
-    res.json({ success: true, freelancers: filtered });
+    return res.json({ success: true, freelancers: filtered });
   } catch (err) {
     console.error("❌ GEO SEARCH ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -200,11 +222,14 @@ router.get("/:id", async (req, res) => {
         hourlyRate: profile.hourlyRate,
         city: profile.city,
         country: profile.country,
+        profilePic: profile.profilePic || "",
+        portfolio: profile.portfolio || [],
+        pastWorks: profile.pastWorks || [],
       },
     });
   } catch (err) {
     console.error("❌ PUBLIC PROFILE ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 

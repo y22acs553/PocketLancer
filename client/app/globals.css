@@ -1,33 +1,26 @@
 @import "tailwindcss";
 
 @theme {
-  /* Industry Standard: Customizing your brand colors directly in CSS */
   --color-brand-primary: #3b82f6;
-  /* A professional blue */
   --color-brand-secondary: #10b981;
-  /* A clean green */
 
-  /* Adding the Geist fonts we set up in the Layout */
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-/* Base styles for the long term */
+/* Base styles */
 @layer base {
   body {
-    @apply antialiased text-slate-900 bg-slate-50;
+    @apply antialiased text-slate-900 bg-slate-50 dark:text-slate-100 dark:bg-slate-950;
   }
 }
 
-/* Industry Standard: Light/Dark mode using modern CSS variables */
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-  }
+html.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
 }
