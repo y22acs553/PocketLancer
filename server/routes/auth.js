@@ -1,6 +1,7 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
+import Freelancer from "../models/Freelancer.js";
 import { protect } from "../middleware/auth.js";
 import crypto from "crypto";
 import { sendPasswordResetEmail } from "../utils/emailUtils.js";
