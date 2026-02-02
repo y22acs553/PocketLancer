@@ -38,6 +38,7 @@ import freelancerRoutes from "./routes/freelancers.js";
 import bookingRoutes from "./routes/bookings.js";
 import clientRoutes from "./routes/client.js";
 import reviewRoutes from "./routes/reviews.js";
+import notificationRoutes from "./routes/notifications.js";
 
 // ======================================================
 // 5️⃣ APP & DB INIT
@@ -87,6 +88,7 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/client", clientRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/uploads", uploadRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 // ======================================================
 // 8️⃣ HEALTH CHECK

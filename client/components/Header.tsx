@@ -11,6 +11,7 @@ import {
   ChevronDown,
   Repeat,
   LayoutDashboard,
+  CalendarDays,
 } from "lucide-react";
 
 export default function Header() {
@@ -161,6 +162,20 @@ export default function Header() {
                       <LayoutDashboard size={16} />
                       Dashboard
                     </button>
+
+                    {/* ✅ Calendar shown ONLY for freelancers */}
+                    {user?.role === "freelancer" && (
+                      <button
+                        onClick={() => {
+                          setOpen(false);
+                          router.push("/calendar");
+                        }}
+                        className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50"
+                      >
+                        <CalendarDays size={16} />
+                        Calendar
+                      </button>
+                    )}
 
                     <button
                       onClick={goToProfile}

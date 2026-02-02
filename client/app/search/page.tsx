@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import api from "@/services/api";
 import { getCurrentLocation } from "@/utils/geolocation";
 import FreelancerCard from "@/components/FreelancerCard";
@@ -15,6 +16,12 @@ import {
 } from "lucide-react";
 
 type SortMode = "nearest" | "cheapest" | "toprated";
+
+// IMPORTANT: Leaflet must be client-only
+const FreelancerMiniMap = dynamic(
+  () => import("@/components/FreelancerMiniMap"),
+  { ssr: false },
+);
 
 function SkeletonCard() {
   return (
@@ -101,6 +108,7 @@ export default function SearchPage() {
       setFreelancers(applySort(list));
     } catch {
       setError("Unable to fetch freelancers. Please allow location access.");
+      setFreelancers([]);
     } finally {
       setLoading(false);
     }
@@ -135,147 +143,162 @@ export default function SearchPage() {
         <div className="absolute -top-36 -right-36 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl" />
         <div className="absolute -bottom-44 -left-44 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl" />
 
+        {/* TOP SECTION: LEFT CONTENT + RIGHT MAP */}
         <div className="relative px-6 py-10 sm:px-10">
-          <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
-            <div className="max-w-2xl">
-              <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
-                PocketLancer Search
-              </p>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            {/* LEFT SIDE */}
+            <div className="lg:col-span-7 space-y-6">
+              {/* HERO TEXT */}
+              <div className="max-w-2xl">
+                <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
+                  PocketLancer Search
+                </p>
 
-              <h1 className="mt-3 text-3xl font-black text-slate-900 sm:text-4xl dark:text-white">
-                {headerTitle}
-              </h1>
+                <h1 className="mt-3 text-3xl font-black text-slate-900 sm:text-4xl dark:text-white">
+                  {headerTitle}
+                </h1>
 
-              <p className="mt-3 text-sm font-bold text-slate-600 dark:text-slate-300">
-                Search local verified professionals, compare pricing, then book
-                instantly.
-              </p>
+                <p className="mt-3 text-sm font-bold text-slate-600 dark:text-slate-300">
+                  Search local verified professionals, compare pricing, then
+                  book instantly.
+                </p>
 
-              <div className="mt-5 flex flex-wrap gap-3">
-                <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                  <Users size={16} className="text-slate-400" />
-                  Real profiles
-                </span>
-                <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                  <MapPin size={16} className="text-slate-400" />
-                  Nearby results
-                </span>
-                <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                  <SlidersHorizontal size={16} className="text-slate-400" />
-                  Filter by skills & radius
-                </span>
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                    <Users size={16} className="text-slate-400" />
+                    Real profiles
+                  </span>
+
+                  <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                    <MapPin size={16} className="text-slate-400" />
+                    Nearby results
+                  </span>
+                </div>
+              </div>
+
+              {/* FILTER PANEL */}
+              <div className="w-full rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-black text-slate-900 dark:text-white">
+                    Search Filters
+                  </p>
+
+                  <button
+                    onClick={() => {
+                      setSkills("");
+                      setRadiusKm(10);
+                      setSortMode("nearest");
+                      setError("");
+                      setFreelancers([]);
+                      searchNearby();
+                    }}
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5"
+                  >
+                    <RefreshCcw size={16} />
+                    Reset
+                  </button>
+                </div>
+
+                <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                  {/* Skills */}
+                  <div className="sm:col-span-2">
+                    <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
+                      Skills / Service
+                    </label>
+                    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:border-blue-500 dark:border-white/10 dark:bg-slate-900">
+                      <Search size={18} className="text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="electrician, plumber, developer..."
+                        value={skills}
+                        onChange={(e) => setSkills(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") searchNearby();
+                        }}
+                        className="w-full bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Radius */}
+                  <div>
+                    <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
+                      Radius (km)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={radiusKm}
+                      onChange={(e) => setRadiusKm(Number(e.target.value))}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/10 dark:bg-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  {/* Sort */}
+                  <div>
+                    <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
+                      Sort by
+                    </label>
+
+                    <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-white/10 dark:bg-slate-900">
+                      <ArrowDownUp size={18} className="text-slate-400" />
+                      <select
+                        value={sortMode}
+                        onChange={(e) =>
+                          setSortMode(e.target.value as SortMode)
+                        }
+                        className="w-full bg-transparent text-sm font-black text-slate-900 outline-none dark:text-white"
+                      >
+                        <option value="nearest">Nearest</option>
+                        <option value="cheapest">Cheapest</option>
+                        <option value="toprated">Top Rated</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Location refresh */}
+                  <div className="sm:col-span-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setCoords(null);
+                        await searchNearby();
+                      }}
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950 dark:text-white dark:hover:bg-white/5"
+                    >
+                      <LocateFixed size={18} className="text-slate-400" />
+                      Refresh GPS
+                    </button>
+                  </div>
+
+                  {/* Search */}
+                  <div className="sm:col-span-2">
+                    <button
+                      onClick={searchNearby}
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-4 text-sm font-black text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900"
+                    >
+                      <SlidersHorizontal size={18} />
+                      Search Freelancers
+                    </button>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+                    {error}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Filter Panel */}
-            <div className="w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-black text-slate-900 dark:text-white">
-                  Search Filters
-                </p>
-
-                <button
-                  onClick={() => {
-                    setSkills("");
-                    setRadiusKm(10);
-                    setSortMode("nearest");
-                    setError("");
-                    setFreelancers([]);
-                    searchNearby();
-                  }}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5"
-                >
-                  <RefreshCcw size={16} />
-                  Reset
-                </button>
-              </div>
-
-              <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                {/* Skills */}
-                <div className="sm:col-span-2">
-                  <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
-                    Skills / Service
-                  </label>
-                  <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:border-blue-500 dark:border-white/10 dark:bg-slate-900">
-                    <Search size={18} className="text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="electrician, plumber, developer..."
-                      value={skills}
-                      onChange={(e) => setSkills(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") searchNearby();
-                      }}
-                      className="w-full bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Radius */}
-                <div>
-                  <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
-                    Radius (km)
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={radiusKm}
-                    onChange={(e) => setRadiusKm(Number(e.target.value))}
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/10 dark:bg-slate-900 dark:text-white"
-                  />
-                </div>
-
-                {/* Sort */}
-                <div>
-                  <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
-                    Sort by
-                  </label>
-
-                  <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-white/10 dark:bg-slate-900">
-                    <ArrowDownUp size={18} className="text-slate-400" />
-                    <select
-                      value={sortMode}
-                      onChange={(e) => setSortMode(e.target.value as SortMode)}
-                      className="w-full bg-transparent text-sm font-black text-slate-900 outline-none dark:text-white"
-                    >
-                      <option value="nearest">Nearest</option>
-                      <option value="cheapest">Cheapest</option>
-                      <option value="toprated">Top Rated</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Location refresh */}
-                <div className="sm:col-span-2">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setCoords(null);
-                      await searchNearby();
-                    }}
-                    className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950 dark:text-white dark:hover:bg-white/5"
-                  >
-                    <LocateFixed size={18} className="text-slate-400" />
-                    Refresh GPS
-                  </button>
-                </div>
-
-                {/* Search */}
-                <div className="sm:col-span-2">
-                  <button
-                    onClick={searchNearby}
-                    className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-4 text-sm font-black text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900"
-                  >
-                    <SlidersHorizontal size={18} />
-                    Search Freelancers
-                  </button>
-                </div>
-              </div>
-
-              {error && (
-                <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
-                  {error}
+            {/* RIGHT SIDE MINI MAP */}
+            <div className="lg:col-span-5">
+              {coords ? (
+                <FreelancerMiniMap center={coords} freelancers={freelancers} />
+              ) : (
+                <div className="h-[650px] w-full rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950 flex items-center justify-center text-sm font-bold text-slate-500">
+                  Fetching GPS…
                 </div>
               )}
             </div>

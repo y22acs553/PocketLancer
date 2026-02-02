@@ -18,6 +18,7 @@ import {
   Menu,
   X,
   Bell,
+  Calendar1Icon,
 } from "lucide-react";
 
 function NavLink({
@@ -105,9 +106,14 @@ export default function DashboardHeader() {
           icon: <Briefcase size={18} />,
         },
         {
-          label: "Bookings",
-          href: "/bookings",
+          label: "Calendar",
+          href: "/calendar",
           icon: <CalendarDays size={18} />,
+        },
+        {
+          label: "Bookings",
+          href: "/freelancer/bookings",
+          icon: <Briefcase size={18} />,
         },
       ];
     }
@@ -340,6 +346,19 @@ export default function DashboardHeader() {
                   <UserIcon size={16} />
                   My Profile
                 </button>
+                {/* ✅ Calendar (Freelancer only) */}
+                {user.role === "freelancer" && (
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      router.push("/freelancer/calendar");
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                  >
+                    <CalendarDays size={16} />
+                    Calendar
+                  </button>
+                )}
 
                 <button
                   onClick={handleSwitchRole}

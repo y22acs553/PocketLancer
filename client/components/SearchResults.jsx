@@ -52,8 +52,5 @@ export default function SearchResults({ results = [] }) {
         ))}
       </div>
     </div>
-    <div className="p-6 bg-white text-black dark:bg-slate-950 dark:text-white">
-  Dark mode test
-</div>
   );
 }

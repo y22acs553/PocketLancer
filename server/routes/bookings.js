@@ -3,6 +3,7 @@ import Booking from "../models/Booking.js";
 import Freelancer from "../models/Freelancer.js";
 import { protect, authorize } from "../middleware/auth.js";
 import { SERVICE_DURATIONS } from "../constants/serviceDurations.js";
+import { createNotification } from "../utils/notify.js";
 
 const router = express.Router();
 
@@ -92,6 +93,14 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       endTime,
       estimatedDurationMinutes,
       address,
+    });
+    await createNotification({
+      userId: freelancer.user, // ✅ Freelancer model has user field
+      title: "New booking request",
+      message: `${req.user.name} requested a booking for ${serviceType}.`,
+      type: "booking_created",
+      link: "/freelancer/bookings",
+      meta: { bookingId: booking._id },
     });
 
     return res.status(201).json({ success: true, booking });

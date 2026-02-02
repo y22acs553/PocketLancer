@@ -24,3 +24,7 @@ html.dark {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
 }
+/* Keep leaflet overlays below header dropdown */
+.leaflet-container {
+  z-index: 0 !important;
+}
