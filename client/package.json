@@ -10,6 +10,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@capacitor/geolocation": "^8.0.0",
     "@fullcalendar/daygrid": "^6.1.20",
     "@fullcalendar/react": "^6.1.20",
     "autoprefixer": "^10.4.23",
