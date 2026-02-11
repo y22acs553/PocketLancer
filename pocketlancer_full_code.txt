@@ -128,6 +128,28 @@ export const SERVICE_DURATIONS = {
   "general service": 60, // fallback
 };
 
+--- FILE: ./server/utils/notify.js ---
+
+import Notification from "../models/Notification.js";
+
+export async function createNotification({
+  userId,
+  title,
+  message,
+  type = "general",
+  link = "",
+  meta = {},
+}) {
+  return Notification.create({
+    user: userId,
+    title,
+    message,
+    type,
+    link,
+    meta,
+  });
+}
+
 --- FILE: ./server/utils/emailUtils.js ---
 
 import { Resend } from "resend";
@@ -325,6 +347,43 @@ const ClientSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 module.exports = mongoose.model('Client', ClientSchema);
+--- FILE: ./server/models/Notification.js ---
+
+import mongoose from "mongoose";
+
+const NotificationSchema = new mongoose.Schema(
+  {
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+
+    title: { type: String, required: true },
+    message: { type: String, required: true },
+
+    type: {
+      type: String,
+      enum: [
+        "booking_created",
+        "booking_accepted",
+        "booking_rejected",
+        "general",
+      ],
+      default: "general",
+    },
+
+    link: { type: String, default: "" }, // where to go on click (ex: /bookings)
+    isRead: { type: Boolean, default: false, index: true },
+
+    meta: { type: Object, default: {} }, // optional extra info
+  },
+  { timestamps: true },
+);
+
+export default mongoose.model("Notification", NotificationSchema);
+
 --- FILE: ./server/models/Review.js ---
 
 import mongoose from "mongoose";
@@ -2431,6 +2490,7 @@ import Booking from "../models/Booking.js";
 import Freelancer from "../models/Freelancer.js";
 import { protect, authorize } from "../middleware/auth.js";
 import { SERVICE_DURATIONS } from "../constants/serviceDurations.js";
+import { createNotification } from "../utils/notify.js";
 
 const router = express.Router();
 
@@ -2520,6 +2580,14 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       endTime,
       estimatedDurationMinutes,
       address,
+    });
+    await createNotification({
+      userId: freelancer.user, // ✅ Freelancer model has user field
+      title: "New booking request",
+      message: `${req.user.name} requested a booking for ${serviceType}.`,
+      type: "booking_created",
+      link: "/freelancer/bookings",
+      meta: { bookingId: booking._id },
     });
 
     return res.status(201).json({ success: true, booking });
@@ -3416,6 +3484,73 @@ router.delete(
     }
   },
 );
+
+export default router;
+
+--- FILE: ./server/routes/notifications.js ---
+
+import express from "express";
+import Notification from "../models/Notification.js";
+import { protect } from "../middleware/auth.js";
+
+const router = express.Router();
+
+/**
+ * GET /api/notifications
+ * fetch notifications of logged user
+ */
+router.get("/", protect, async (req, res) => {
+  try {
+    const list = await Notification.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(30);
+
+    const unreadCount = await Notification.countDocuments({
+      user: req.user._id,
+      isRead: false,
+    });
+
+    res.json({ success: true, notifications: list, unreadCount });
+  } catch (err) {
+    console.error("❌ NOTIF FETCH ERROR:", err);
+    res.status(500).json({ msg: "Server error" });
+  }
+});
+
+/**
+ * PATCH /api/notifications/:id/read
+ */
+router.patch("/:id/read", protect, async (req, res) => {
+  try {
+    const notif = await Notification.findOneAndUpdate(
+      { _id: req.params.id, user: req.user._id },
+      { isRead: true },
+      { new: true },
+    );
+
+    res.json({ success: true, notification: notif });
+  } catch (err) {
+    console.error("❌ NOTIF READ ERROR:", err);
+    res.status(500).json({ msg: "Server error" });
+  }
+});
+
+/**
+ * PATCH /api/notifications/read-all
+ */
+router.patch("/read-all", protect, async (req, res) => {
+  try {
+    await Notification.updateMany(
+      { user: req.user._id, isRead: false },
+      { $set: { isRead: true } },
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ NOTIF READALL ERROR:", err);
+    res.status(500).json({ msg: "Server error" });
+  }
+});
 
 export default router;
 
@@ -11665,7 +11800,7 @@ interface UserContextType {
   user: User | null;
   loading: boolean;
   logout: () => Promise<void>;
-  refreshUser: () => Promise<void>; // ✅ ADD
+  refreshUser: () => Promise<void>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
@@ -15053,27 +15188,6 @@ export default function Page() {
   );
 }
 
---- FILE: ./client/app/map-search/page.tsx ---
-
-"use client";
-
-import dynamic from "next/dynamic";
-
-// We import the map component dynamically and disable Server-Side Rendering (SSR)
-// This ensures the map only loads once the code reaches the browser.
-const MapComponent = dynamic(() => import("@/components/MapComponent"), {
-  ssr: false,
-  loading: () => (
-    <div className="h-[calc(100vh-4rem)] w-full flex items-center justify-center bg-slate-50">
-      <p className="text-slate-500 animate-pulse">Initializing map engine...</p>
-    </div>
-  ),
-});
-
-export default function MapSearchPage() {
-  return <MapComponent />;
-}
-
 --- FILE: ./client/app/page.tsx ---
 
 "use client";
@@ -18128,7 +18242,7 @@ export default function DashboardHeader() {
         },
         {
           label: "Calendar",
-          href: "/freelancer/calendar",
+          href: "/calendar",
           icon: <CalendarDays size={18} />,
         },
         {
@@ -18818,7 +18932,7 @@ export default function Header() {
                       <button
                         onClick={() => {
                           setOpen(false);
-                          router.push("/freelancer/calendar");
+                          router.push("/calendar");
                         }}
                         className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50"
                       >

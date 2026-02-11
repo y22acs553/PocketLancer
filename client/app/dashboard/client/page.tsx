@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
+import GetLocationButton from "@/components/GetLocationButton";
 import { useUser } from "@/context/UserContext";
 import {
   Search,
@@ -202,6 +203,9 @@ export default function ClientDashboard() {
             <Star size={16} fill="currentColor" /> Leave review after completion
           </li>
         </ul>
+      </div>
+      <div>
+        <GetLocationButton />
       </div>
     </div>
   );

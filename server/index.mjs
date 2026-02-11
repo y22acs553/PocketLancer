@@ -8,6 +8,9 @@ import cors from "cors";
 import path from "path";
 import uploadRoutes from "./routes/uploads.js";
 import { fileURLToPath } from "url";
+import disputeRoutes from "./routes/disputes.js";
+import profileRoutes from "./routes/profile.js";
+import "./jobs/disputeSLA.js";
 
 // ======================================================
 // 2️⃣ ESM PATH HELPERS
@@ -39,6 +42,7 @@ import bookingRoutes from "./routes/bookings.js";
 import clientRoutes from "./routes/client.js";
 import reviewRoutes from "./routes/reviews.js";
 import notificationRoutes from "./routes/notifications.js";
+import adminRoutes from "./routes/admin.js";
 
 // ======================================================
 // 5️⃣ APP & DB INIT
@@ -89,6 +93,9 @@ app.use("/api/client", clientRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/disputes", disputeRoutes);
+app.use("/api/profile", profileRoutes);
 
 // ======================================================
 // 8️⃣ HEALTH CHECK

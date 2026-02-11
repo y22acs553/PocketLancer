@@ -18,6 +18,10 @@ const UserSchema = new mongoose.Schema(
       required: true,
       select: false,
     },
+    avatar: {
+      type: String,
+      default: "",
+    },
 
     // ✅ Forgot password fields
     passwordResetToken: { type: String },
@@ -25,7 +29,7 @@ const UserSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ["client", "freelancer"],
+      enum: ["client", "freelancer", "admin"],
       default: "client",
     },
   },

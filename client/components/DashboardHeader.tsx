@@ -39,10 +39,11 @@ function NavLink({
     <Link
       href={href}
       onClick={onClick}
+      // Change inline-flex to flex for mobile-friendly full-width buttons
       className={[
-        "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-extrabold transition",
+        "flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-extrabold transition",
         active
-          ? "bg-slate-900 text-white shadow"
+          ? "bg-slate-900 text-white shadow dark:bg-white dark:text-slate-900"
           : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900",
       ].join(" ")}
     >
@@ -92,6 +93,15 @@ export default function DashboardHeader() {
 
   const links = useMemo(() => {
     if (!user) return [];
+    if (user.role === "admin") {
+      return [
+        {
+          label: "Admin Panel",
+          href: "/admin",
+          icon: <LayoutDashboard size={18} />,
+        },
+      ];
+    }
 
     if (user.role === "freelancer") {
       return [
@@ -165,6 +175,7 @@ export default function DashboardHeader() {
     setMobileOpen(false);
 
     if (user.role === "freelancer") router.push("/freelancer/profile");
+    if (user.role === "client") router.push("/client/profile");
     else router.push("/dashboard/client");
   };
 
@@ -233,14 +244,6 @@ export default function DashboardHeader() {
 
         {/* Right controls */}
         <div className="flex items-center gap-3">
-          {/* Mobile menu */}
-          <button
-            className="lg:hidden rounded-xl border px-3 py-2 font-extrabold hover:bg-slate-50 inline-flex items-center gap-2 dark:border-slate-800 dark:hover:bg-slate-900"
-            onClick={() => setMobileOpen(true)}
-          >
-            <Menu size={18} className="dark:text-white" />
-          </button>
-
           {/* Notifications */}
           <div className="relative" ref={notifRef}>
             <button
@@ -331,7 +334,12 @@ export default function DashboardHeader() {
                 <button
                   onClick={() => {
                     setMenuOpen(false);
-                    router.push("/dashboard");
+
+                    if (user.role === "admin") {
+                      router.push("/admin");
+                    } else {
+                      router.push("/dashboard");
+                    }
                   }}
                   className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
                 >
@@ -360,13 +368,15 @@ export default function DashboardHeader() {
                   </button>
                 )}
 
-                <button
-                  onClick={handleSwitchRole}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
-                >
-                  <Repeat size={16} />
-                  Switch Role
-                </button>
+                {user.role !== "admin" && (
+                  <button
+                    onClick={handleSwitchRole}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                  >
+                    <Repeat size={16} />
+                    Switch Role
+                  </button>
+                )}
 
                 <div className="h-px bg-slate-100 dark:bg-slate-800" />
 
@@ -382,86 +392,6 @@ export default function DashboardHeader() {
           </div>
         </div>
       </div>
-
-      {/* Mobile Drawer */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setMobileOpen(false)}
-          />
-          <div className="absolute right-0 top-0 h-full w-80 bg-white shadow-2xl border-l p-6 dark:bg-slate-950 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-6">
-              <p className="font-black text-slate-900 dark:text-white">Menu</p>
-              <button
-                onClick={() => setMobileOpen(false)}
-                className="rounded-xl border p-2 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
-              >
-                <X size={18} className="dark:text-white" />
-              </button>
-            </div>
-
-            {/* Search mobile */}
-            <div className="mb-5 flex items-center gap-2 rounded-2xl border px-3 py-2 dark:border-slate-800">
-              <SearchIcon
-                size={18}
-                className="text-slate-500 dark:text-slate-300"
-              />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSearch();
-                }}
-                placeholder={
-                  user.role === "client"
-                    ? "Search skills..."
-                    : "Search bookings..."
-                }
-                className="flex-1 bg-transparent outline-none text-sm font-bold text-slate-800 placeholder:text-slate-400 dark:text-white"
-              />
-            </div>
-
-            <div className="space-y-2">
-              {links.map((l) => (
-                <NavLink
-                  key={l.href}
-                  href={l.href}
-                  label={l.label}
-                  icon={l.icon}
-                  onClick={() => setMobileOpen(false)}
-                />
-              ))}
-            </div>
-
-            <div className="mt-8 space-y-2">
-              <button
-                onClick={goToProfile}
-                className="w-full rounded-2xl border px-4 py-3 font-extrabold text-slate-800 hover:bg-slate-50 flex items-center gap-3 dark:border-slate-800 dark:text-white dark:hover:bg-slate-900"
-              >
-                <UserIcon size={18} />
-                My Profile
-              </button>
-
-              <button
-                onClick={handleSwitchRole}
-                className="w-full rounded-2xl border px-4 py-3 font-extrabold text-slate-800 hover:bg-slate-50 flex items-center gap-3 dark:border-slate-800 dark:text-white dark:hover:bg-slate-900"
-              >
-                <Repeat size={18} />
-                Switch Role
-              </button>
-
-              <button
-                onClick={handleLogout}
-                className="w-full rounded-2xl bg-red-600 px-4 py-3 font-extrabold text-white hover:bg-red-700 transition flex items-center gap-3 justify-center"
-              >
-                <LogOut size={18} />
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </header>
   );
 }

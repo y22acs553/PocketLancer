@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
 import ReviewModal from "@/components/ReviewModal";
+import DisputeModal from "@/components/DisputeModal";
 import { useUser } from "@/context/UserContext";
 import {
   Calendar,
@@ -81,6 +82,8 @@ export default function MyBookingsPage() {
 
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showDispute, setShowDispute] = useState(false);
+  const [disputeBooking, setDisputeBooking] = useState<string | null>(null);
 
   // UI controls
   const [query, setQuery] = useState("");
@@ -509,6 +512,17 @@ export default function MyBookingsPage() {
                                   Leave Review
                                 </button>
                               )}
+                            {b.status === "completed" && (
+                              <button
+                                onClick={() => {
+                                  setDisputeBooking(b._id);
+                                  setShowDispute(true);
+                                }}
+                                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white hover:bg-red-700"
+                              >
+                                Raise Dispute
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -566,6 +580,12 @@ export default function MyBookingsPage() {
         <ReviewModal
           bookingId={selectedBooking}
           onClose={() => setShowReview(false)}
+        />
+      )}
+      {showDispute && disputeBooking && (
+        <DisputeModal
+          bookingId={disputeBooking}
+          onClose={() => setShowDispute(false)}
         />
       )}
     </div>

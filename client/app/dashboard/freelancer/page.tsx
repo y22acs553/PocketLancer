@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
+import GetLocationButton from "@/components/GetLocationButton";
 import { useUser } from "@/context/UserContext";
 import {
   Loader2,
@@ -442,6 +443,9 @@ export default function FreelancerDashboard() {
             </div>
           </div>
         </div>
+      </div>
+      <div>
+        <GetLocationButton />
       </div>
     </div>
   );

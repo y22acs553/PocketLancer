@@ -23,7 +23,13 @@ export default function LoginPage() {
    * If user is already logged in, they should NEVER stay on /login
    */
   useEffect(() => {
-    if (!userLoading && user) router.replace("/dashboard");
+    if (!userLoading && user) {
+      if (user.role === "admin") {
+        router.replace("/admin");
+      } else {
+        router.replace("/dashboard");
+      }
+    }
   }, [userLoading, user, router]);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {

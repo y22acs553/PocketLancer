@@ -1,5 +1,5 @@
 "use client";
-
+import { useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
 import api from "@/services/api";
 
@@ -7,32 +7,33 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: "client" | "freelancer";
+  role: "client" | "freelancer" | "admin";
 }
 
 interface UserContextType {
   user: User | null;
   loading: boolean;
   logout: () => Promise<void>;
-  refreshUser: () => Promise<void>; // ✅ ADD
+  refreshUser: () => Promise<void>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter(); // ✅ FIX HERE
+
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /**
-   * 🔐 Check session on app load
-   */
   const fetchSession = async () => {
     try {
       const res = await api.get("/auth/check-session");
-      setUser(res.data.user);
+
+      const loggedUser = res.data.user;
+      setUser(loggedUser);
     } catch (err: any) {
       if (err.response?.status === 401) {
-        setUser(null); // normal unauthenticated state
+        setUser(null);
       } else {
         console.error("Session check failed", err);
       }

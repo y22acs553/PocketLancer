@@ -2,7 +2,7 @@
 
 import { useUser } from "@/context/UserContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import DashboardHeader from "@/components/DashboardHeader";
 
@@ -16,6 +16,11 @@ export default function DashboardLayout({
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
+
+    // 🔴 Block admin from dashboard
+    if (!loading && user?.role === "admin") {
+      router.replace("/admin");
+    }
   }, [user, loading, router]);
 
   if (loading) {
@@ -33,9 +38,7 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* ✅ pass theme + toggleTheme to header */}
       <DashboardHeader />
-
       <main className="w-full px-4 sm:px-6 lg:px-12 py-8">{children}</main>
     </div>
   );
