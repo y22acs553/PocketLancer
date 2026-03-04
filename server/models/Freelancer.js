@@ -66,6 +66,11 @@ const FreelancerSchema = new mongoose.Schema(
       type: GeoPointSchema,
       required: false,
     },
+    category: {
+      type: String,
+      enum: ["field", "digital"],
+      default: "field",
+    },
 
     // Stored for UX / display only
     city: {

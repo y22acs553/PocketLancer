@@ -43,6 +43,7 @@ import clientRoutes from "./routes/client.js";
 import reviewRoutes from "./routes/reviews.js";
 import notificationRoutes from "./routes/notifications.js";
 import adminRoutes from "./routes/admin.js";
+import portfolioRoutes from "./routes/portfolio.js";
 
 // ======================================================
 // 5️⃣ APP & DB INIT
@@ -96,6 +97,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/disputes", disputeRoutes);
 app.use("/api/profile", profileRoutes);
+app.use("/api/portfolio", portfolioRoutes);
 
 // ======================================================
 // 8️⃣ HEALTH CHECK

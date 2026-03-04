@@ -63,6 +63,7 @@ export default function SearchPage() {
   const [error, setError] = useState("");
 
   const [sortMode, setSortMode] = useState<SortMode>("nearest");
+  const [category, setCategory] = useState<"field" | "digital">("field");
 
   const [coords, setCoords] = useState<{
     latitude: number;
@@ -92,22 +93,30 @@ export default function SearchPage() {
       setLoading(true);
       setError("");
 
-      const pos = coords ?? (await getCurrentLocation());
-      setCoords(pos);
+      const params: any = {
+        category,
+        skills,
+      };
 
-      const res = await api.get("/freelancers/search", {
-        params: {
-          latitude: pos.latitude,
-          longitude: pos.longitude,
-          radiusKm,
-          skills,
-        },
-      });
+      if (category === "field") {
+        const pos = coords ?? (await getCurrentLocation());
+        setCoords(pos);
+
+        params.latitude = pos.latitude;
+        params.longitude = pos.longitude;
+        params.radiusKm = radiusKm;
+      }
+
+      const res = await api.get("/freelancers/search", { params });
 
       const list = res.data.freelancers || [];
       setFreelancers(applySort(list));
     } catch {
-      setError("Unable to fetch freelancers. Please allow location access.");
+      setError(
+        category === "field"
+          ? "Unable to fetch freelancers. Please allow location access."
+          : "Unable to fetch freelancers.",
+      );
       setFreelancers([]);
     } finally {
       setLoading(false);
@@ -124,6 +133,10 @@ export default function SearchPage() {
     setFreelancers((prev) => applySort(prev));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortMode]);
+  useEffect(() => {
+    searchNearby();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category]);
 
   const headerTitle = useMemo(() => {
     if (skills.trim()) return `Freelancers for “${skills.trim()}”`;
@@ -131,10 +144,16 @@ export default function SearchPage() {
   }, [skills]);
 
   const subtitle = useMemo(() => {
+    if (category === "digital") {
+      if (sortMode === "cheapest") return "Sorted by lowest hourly rate";
+      if (sortMode === "toprated") return "Sorted by highest rating";
+      return "Sorted by relevance";
+    }
+
     if (sortMode === "nearest") return "Sorted by nearest professionals";
     if (sortMode === "cheapest") return "Sorted by lowest hourly rate";
     return "Sorted by highest rating";
-  }, [sortMode]);
+  }, [sortMode, category]);
 
   return (
     <div className="min-h-[calc(100vh-80px)] w-full">
@@ -177,8 +196,32 @@ export default function SearchPage() {
               </div>
 
               {/* FILTER PANEL */}
+
               <div className="w-full rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950">
                 <div className="flex items-center justify-between gap-3">
+                  <div className="flex gap-2 mb-6">
+                    <button
+                      onClick={() => setCategory("field")}
+                      className={`px-4 py-2 rounded-2xl font-bold ${
+                        category === "field"
+                          ? "bg-slate-900 text-white"
+                          : "bg-slate-200 text-slate-700"
+                      }`}
+                    >
+                      Field Services
+                    </button>
+
+                    <button
+                      onClick={() => setCategory("digital")}
+                      className={`px-4 py-2 rounded-2xl font-bold ${
+                        category === "digital"
+                          ? "bg-slate-900 text-white"
+                          : "bg-slate-200 text-slate-700"
+                      }`}
+                    >
+                      Digital Services
+                    </button>
+                  </div>
                   <p className="text-sm font-black text-slate-900 dark:text-white">
                     Search Filters
                   </p>
@@ -221,19 +264,21 @@ export default function SearchPage() {
                   </div>
 
                   {/* Radius */}
-                  <div>
-                    <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
-                      Radius (km)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={radiusKm}
-                      onChange={(e) => setRadiusKm(Number(e.target.value))}
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/10 dark:bg-slate-900 dark:text-white"
-                    />
-                  </div>
+                  {category === "field" && (
+                    <div>
+                      <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
+                        Radius (km)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={radiusKm}
+                        onChange={(e) => setRadiusKm(Number(e.target.value))}
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/10 dark:bg-slate-900 dark:text-white"
+                      />
+                    </div>
+                  )}
 
                   {/* Sort */}
                   <div>
@@ -294,11 +339,18 @@ export default function SearchPage() {
 
             {/* RIGHT SIDE MINI MAP */}
             <div className="lg:col-span-5">
-              {coords ? (
-                <FreelancerMiniMap center={coords} freelancers={freelancers} />
+              {category === "field" ? (
+                coords ? (
+                  <FreelancerMiniMap
+                    center={coords}
+                    freelancers={freelancers}
+                  />
+                ) : (
+                  <div className="h-[650px] ...">Fetching GPS…</div>
+                )
               ) : (
-                <div className="h-[650px] w-full rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950 flex items-center justify-center text-sm font-bold text-slate-500">
-                  Fetching GPS…
+                <div className="h-[650px] w-full rounded-3xl border border-slate-200 bg-white shadow-sm flex items-center justify-center text-sm font-bold text-slate-500">
+                  Digital services do not use location.
                 </div>
               )}
             </div>

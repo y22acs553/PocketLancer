@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import PortfolioLightbox from "@/components/PortfolioLightbox";
 import api from "@/services/api";
 import Image from "next/image";
 import {
@@ -45,11 +46,13 @@ export default function PublicFreelancerProfilePage() {
   const params = useParams();
   const router = useRouter();
   const id = params?.id as string;
-
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingReviews, setLoadingReviews] = useState(true);
+  const [portfolio, setPortfolio] = useState<any[]>([]);
+  const [loadingPortfolio, setLoadingPortfolio] = useState(true);
 
   const cardClass =
     "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all";
@@ -76,6 +79,24 @@ export default function PublicFreelancerProfilePage() {
 
     if (id) load();
   }, [id, router]);
+  useEffect(() => {
+    const loadPortfolio = async () => {
+      try {
+        if (!id) return;
+
+        setLoadingPortfolio(true);
+
+        const res = await api.get(`/portfolio/${id}`);
+        setPortfolio(res.data || []);
+      } catch {
+        setPortfolio([]);
+      } finally {
+        setLoadingPortfolio(false);
+      }
+    };
+
+    loadPortfolio();
+  }, [id]);
 
   useEffect(() => {
     const loadReviews = async () => {
@@ -200,24 +221,82 @@ export default function PublicFreelancerProfilePage() {
           </div>
 
           {/* Portfolio */}
+          {/* Portfolio */}
           <div className={cardClass}>
-            <h3 className="text-lg font-extrabold text-slate-900 mb-3">
-              Portfolio
-            </h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-extrabold text-slate-900">
+                Portfolio
+              </h3>
 
-            {profile.portfolio?.length ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {profile.portfolio.map((p, idx) => (
-                  <div
-                    key={idx}
-                    className="rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5 font-bold text-slate-700"
-                  >
-                    {p}
-                  </div>
-                ))}
+              <span className="text-sm text-slate-500 font-medium">
+                {portfolio.length} projects
+              </span>
+            </div>
+
+            {loadingPortfolio ? (
+              <div className="flex items-center gap-2 text-slate-600">
+                <Loader2 className="animate-spin" size={18} />
+                Loading portfolio...
               </div>
+            ) : portfolio.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                No portfolio items added.
+              </p>
             ) : (
-              <p className="text-sm text-slate-500">No portfolio added.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {portfolio.map((item, idx) => {
+                  const rawUrl = item.url || item.websiteUrl || "";
+                  const url = rawUrl.startsWith("http")
+                    ? rawUrl
+                    : `https://${rawUrl}`;
+
+                  return (
+                    <div
+                      key={item._id}
+                      onClick={() =>
+                        item.type !== "website" && setLightboxIndex(idx)
+                      }
+                      className="group relative overflow-hidden rounded-2xl bg-slate-50 ring-1 ring-black/5 cursor-pointer"
+                    >
+                      {item.type === "image" && (
+                        <img
+                          src={url}
+                          className="w-full h-44 object-cover transition group-hover:scale-105"
+                        />
+                      )}
+
+                      {item.type === "video" && (
+                        <video
+                          src={url}
+                          muted
+                          playsInline
+                          className="w-full h-44 object-cover"
+                        />
+                      )}
+
+                      {item.type === "website" && (
+                        <a
+                          href={url}
+                          target="_blank"
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex flex-col items-center justify-center h-44 bg-slate-100 text-blue-600 font-semibold"
+                        >
+                          <LinkIcon size={22} />
+                          <span className="mt-1">
+                            {item.title || "Visit Website"}
+                          </span>
+                        </a>
+                      )}
+
+                      {item.title && (
+                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 text-white text-sm font-semibold">
+                          {item.title}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 
@@ -328,6 +407,18 @@ export default function PublicFreelancerProfilePage() {
           </div>
         </div>
       </div>
+      {lightboxIndex !== null && lightboxIndex >= 0 && (
+        <PortfolioLightbox
+          items={portfolio.map((item) => ({
+            url: item.url || item.websiteUrl,
+            type: item.type,
+            title: item.title,
+          }))}
+          index={lightboxIndex}
+          setIndex={(i) => setLightboxIndex(i)}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </div>
   );
 }

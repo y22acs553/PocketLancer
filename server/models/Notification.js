@@ -1,34 +1,35 @@
 import mongoose from "mongoose";
 
-const NotificationSchema = new mongoose.Schema(
+const notificationSchema = new mongoose.Schema(
   {
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
-
-    title: { type: String, required: true },
-    message: { type: String, required: true },
 
     type: {
       type: String,
       enum: [
         "booking_created",
         "booking_accepted",
-        "booking_rejected",
-        "general",
+        "booking_completed",
+        "payment_released",
+        "profile_updated",
+        "review_received",
       ],
-      default: "general",
     },
 
-    link: { type: String, default: "" }, // where to go on click (ex: /bookings)
-    isRead: { type: Boolean, default: false, index: true },
+    message: String,
 
-    meta: { type: Object, default: {} }, // optional extra info
+    link: String, // optional redirect
+
+    read: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true },
 );
 
-export default mongoose.model("Notification", NotificationSchema);
+export default mongoose.model("Notification", notificationSchema);

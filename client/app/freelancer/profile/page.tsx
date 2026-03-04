@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
+
 import {
   Camera,
   MapPin,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { getCurrentLocation, reverseGeocode } from "@/utils/geolocation";
+import PortfolioManager from "@/components/PortfolioManager";
 
 type Review = {
   _id: string;
@@ -41,6 +43,7 @@ type PastWork = {
 type Profile = {
   _id?: string;
   name?: string;
+  category: "field" | "digital";
   title: string;
   bio: string;
   skills: string[];
@@ -107,6 +110,7 @@ export default function FreelancerProfilePage() {
 
         setProfile({
           ...loaded,
+          category: loaded?.category || "field",
           name: loaded?.name || user?.name || "Freelancer",
           portfolio: loaded?.portfolio || [],
           pastWorks: loaded?.pastWorks || [],
@@ -130,6 +134,7 @@ export default function FreelancerProfilePage() {
           profilePic: "",
           portfolio: [],
           pastWorks: [],
+          category: "field",
         });
         setLocationStatus("idle");
       });
@@ -268,6 +273,19 @@ export default function FreelancerProfilePage() {
         "Drain Cleaning",
       ].forEach((s) => bag.add(s));
     }
+    if (profile?.category === "digital") {
+      [
+        "React",
+        "Next.js",
+        "Node.js",
+        "UI/UX",
+        "SEO",
+        "Adobe Premiere",
+        "After Effects",
+        "Photography",
+        "Video Editing",
+      ].forEach((s) => bag.add(s));
+    }
 
     if (
       title.includes("ac") ||
@@ -339,7 +357,10 @@ export default function FreelancerProfilePage() {
   const saveProfile = async () => {
     if (!profile) return;
 
-    if (profile.latitude == null || profile.longitude == null) {
+    if (
+      profile.category === "field" &&
+      (profile.latitude == null || profile.longitude == null)
+    ) {
       setError("Please allow location access before saving.");
       return;
     }
@@ -358,23 +379,8 @@ export default function FreelancerProfilePage() {
   };
 
   // ---------------------------
-  // Portfolio + Past works
+  // Past works
   // ---------------------------
-  const addPortfolioItem = () => {
-    setProfile((prev) => {
-      if (!prev) return prev;
-      return { ...prev, portfolio: [...(prev.portfolio || []), ""] };
-    });
-  };
-
-  const removePortfolioItem = (idx: number) => {
-    setProfile((prev) => {
-      if (!prev) return prev;
-      const items = [...(prev.portfolio || [])];
-      items.splice(idx, 1);
-      return { ...prev, portfolio: items };
-    });
-  };
 
   const addPastWork = () => {
     setProfile((prev) => {
@@ -406,17 +412,25 @@ export default function FreelancerProfilePage() {
     );
   }
 
-  const hasCoords = profile.latitude != null && profile.longitude != null;
+  const hasCoords =
+    profile.category === "digital" ||
+    (profile.latitude != null && profile.longitude != null);
 
   const completion = (() => {
     let score = 0;
-    if (profile.profilePic) score += 18;
-    if (profile.title?.trim()) score += 14;
-    if (profile.bio?.trim() && profile.bio.trim().length >= 30) score += 14;
-    if (profile.skills?.length >= 5) score += 18;
-    if ((profile.portfolio || []).filter(Boolean).length >= 2) score += 14;
-    if ((profile.pastWorks || []).length >= 2) score += 12;
-    if (hasCoords) score += 10;
+    if (profile.profilePic) score += 15;
+    if (profile.title?.trim()) score += 15;
+    if (profile.bio?.trim() && profile.bio.trim().length >= 30) score += 15;
+    if (profile.skills?.length >= 5) score += 20;
+
+    if (profile.category === "digital") {
+      score += 15; // no location needed
+    } else {
+      if (hasCoords) score += 15;
+    }
+
+    if ((profile.pastWorks || []).length >= 2) score += 10;
+
     return clamp(score, 0, 100);
   })();
 
@@ -492,7 +506,7 @@ export default function FreelancerProfilePage() {
                     </p>
                   </div>
 
-                  {!hasCoords ? (
+                  {profile.category === "field" && !hasCoords ? (
                     <span className="inline-flex items-center gap-2 rounded-full bg-red-500/10 px-3 py-1 text-xs font-black text-red-700 ring-1 ring-red-500/20 dark:text-red-300">
                       <ShieldCheck size={16} />
                       Location Required
@@ -512,7 +526,7 @@ export default function FreelancerProfilePage() {
                   />
                 </div>
 
-                {!hasCoords && (
+                {profile.category === "field" && !hasCoords && (
                   <div className="mt-4 rounded-2xl bg-red-500/10 px-4 py-3 ring-1 ring-red-500/20">
                     <p className="text-sm font-bold text-red-700 dark:text-red-200">
                       Your profile is hidden until you enable location.
@@ -565,13 +579,13 @@ export default function FreelancerProfilePage() {
                 <div className="flex items-center gap-4">
                   <div className="relative h-28 w-28 overflow-hidden rounded-3xl bg-slate-100 ring-1 ring-black/10 dark:bg-slate-900 dark:ring-white/10">
                     {profile.profilePic ? (
-                      <Image
-                        src={profile.profilePic}
-                        alt="Profile"
-                        fill
-                        sizes="112px"
-                        priority
-                        className="object-cover"
+                      <img
+                        src={profile.profilePic || "/default-avatar.png"}
+                        alt={profile.name}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src =
+                            "/default-avatar.png";
+                        }}
                       />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center">
@@ -648,6 +662,29 @@ export default function FreelancerProfilePage() {
                         setProfile({ ...profile, title: e.target.value })
                       }
                     />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                      Service Type
+                    </label>
+
+                    <select
+                      value={profile.category}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          category: e.target.value as "field" | "digital",
+                        })
+                      }
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/10 dark:bg-slate-900 dark:text-white"
+                    >
+                      <option value="field">
+                        Field Service (Plumber, Electrician, etc.)
+                      </option>
+                      <option value="digital">
+                        Digital Service (Web Dev, Designer, Editor, etc.)
+                      </option>
+                    </select>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -811,67 +848,8 @@ export default function FreelancerProfilePage() {
             </div>
 
             {/* Portfolio */}
-            <div className={innerCard}>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                    Portfolio
-                  </h3>
-                  <p className="text-sm font-bold text-slate-600 dark:text-slate-300">
-                    Showcase services you provide.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={addPortfolioItem}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900"
-                >
-                  <Plus size={18} />
-                  Add
-                </button>
-              </div>
-
-              {(profile.portfolio || []).length === 0 ? (
-                <div className="mt-5 rounded-3xl border border-slate-200 bg-white p-6 text-sm font-bold text-slate-600 shadow-sm dark:border-white/10 dark:bg-slate-950 dark:text-slate-300">
-                  Add 2+ items to improve client trust.
-                </div>
-              ) : (
-                <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {(profile.portfolio || []).map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="rounded-3xl bg-slate-50 p-4 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10"
-                    >
-                      <div className="flex gap-2">
-                        <input
-                          className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 dark:border-white/10 dark:bg-slate-950 dark:text-white"
-                          placeholder={`Portfolio item ${idx + 1}`}
-                          value={item}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setProfile((prev) => {
-                              if (!prev) return prev;
-                              const updated = [...(prev.portfolio || [])];
-                              updated[idx] = val;
-                              return { ...prev, portfolio: updated };
-                            });
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removePortfolioItem(idx)}
-                          className="rounded-2xl bg-white px-4 ring-1 ring-black/10 hover:bg-red-50 dark:bg-slate-950 dark:ring-white/10 dark:hover:bg-red-500/10"
-                          title="Remove"
-                        >
-                          <Trash2 size={18} className="text-red-600" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Digital Portfolio */}
+            {profile.category === "digital" && <PortfolioManager />}
 
             {/* Past works */}
             <div className={innerCard}>
@@ -995,7 +973,8 @@ export default function FreelancerProfilePage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                    Location (Required)
+                    Location{" "}
+                    {profile.category === "field" ? "(Required)" : "(Optional)"}
                   </h3>
                   <p className="mt-1 text-sm font-bold text-slate-600 dark:text-slate-300">
                     Your profile will be searchable only after enabling
@@ -1104,10 +1083,21 @@ export default function FreelancerProfilePage() {
                   <div>
                     <p className="font-black">Profile tips</p>
                     <ul className="mt-2 space-y-1 text-sm font-bold opacity-90">
-                      <li>• Add at least 5 skills</li>
-                      <li>• Add 2+ past works with links</li>
-                      <li>• Keep bio above 60 characters</li>
-                      <li>• Enable location to appear in search</li>
+                      {profile.category === "field" ? (
+                        <>
+                          <li>• Add at least 5 skills</li>
+                          <li>• Add 2+ past works with links</li>
+                          <li>• Keep bio above 60 characters</li>
+                          <li>• Enable location to appear in search</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>• Add at least 5 skills</li>
+                          <li>• Upload 2+ portfolio projects</li>
+                          <li>• Add 2+ past works</li>
+                          <li>• Keep bio above 60 characters</li>
+                        </>
+                      )}
                     </ul>
                   </div>
                 </div>

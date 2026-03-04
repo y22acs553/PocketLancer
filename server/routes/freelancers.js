@@ -38,7 +38,7 @@ router.get("/me", protect, authorize("freelancer"), async (req, res) => {
         hourlyRate: 0,
         city: "",
         country: "",
-        // location intentionally not set here
+        category: "field", // default explicit
       });
     }
 
@@ -63,32 +63,56 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       profilePic,
       portfolio,
       pastWorks,
+      category,
     } = req.body;
+    // ✅ Validate category
+    if (category && !["field", "digital"].includes(category)) {
+      return res.status(400).json({
+        msg: "Invalid category",
+      });
+    }
+    if (category === "digital") {
+    }
 
     // ✅ enforce location mandatory when saving profile
-    if (!isValidCoordinates(latitude, longitude)) {
+    // ✅ Require location ONLY for field services
+    if (
+      (category === "field" || !category) &&
+      !isValidCoordinates(latitude, longitude)
+    ) {
       return res.status(400).json({
-        msg: "Valid GPS location is required",
+        msg: "Valid GPS location is required for field services",
       });
+    }
+
+    // Build update object safely
+    const updateData = {
+      title,
+      bio,
+      skills,
+      hourlyRate,
+      city,
+      country,
+      profilePic,
+      portfolio,
+      pastWorks,
+      category,
+    };
+
+    if (category === "digital") {
+      updateData.location = undefined;
+    }
+
+    if (category === "field" && isValidCoordinates(latitude, longitude)) {
+      updateData.location = {
+        type: "Point",
+        coordinates: [longitude, latitude],
+      };
     }
 
     const profile = await Freelancer.findOneAndUpdate(
       { user: req.user._id },
-      {
-        title,
-        bio,
-        skills,
-        hourlyRate,
-        city,
-        country,
-        profilePic,
-        portfolio,
-        pastWorks,
-        location: {
-          type: "Point",
-          coordinates: [longitude, latitude],
-        },
-      },
+      updateData,
       { new: true, upsert: true },
     );
 
@@ -108,160 +132,119 @@ router.get("/search", protect, async (req, res) => {
     const latitude = Number(req.query.latitude);
     const longitude = Number(req.query.longitude);
     const radiusKm = Number(req.query.radiusKm || 10);
-
+    const category = String(req.query.category || "field");
     const skillsText = String(req.query.skills || "").trim();
 
-    if (!isValidCoordinates(latitude, longitude)) {
-      return res
-        .status(400)
-        .json({ msg: "Valid latitude and longitude required" });
-    }
+    let freelancers = [];
 
-    // ✅ Create safe regex for partial match: "elect" matches "electrician"
-    let searchRegex = null;
-    if (skillsText) {
-      const escaped = skillsText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      searchRegex = new RegExp(escaped, "i");
-    }
+    // ==============================
+    // FIELD SERVICES SEARCH
+    // ==============================
+    if (category === "field") {
+      if (!isValidCoordinates(latitude, longitude)) {
+        return res.status(400).json({
+          msg: "Valid latitude and longitude required",
+        });
+      }
 
-    const geoQuery = {
-      location: { $exists: true },
-      "location.coordinates.0": { $type: "number" },
-      "location.coordinates.1": { $type: "number" },
-    };
+      const geoQuery = {
+        category: "field",
+        location: { $exists: true },
+        "location.coordinates.0": { $type: "number" },
+        "location.coordinates.1": { $type: "number" },
+      };
 
-    // ✅ Intelligent match across multiple fields
-    if (searchRegex) {
-      geoQuery.$or = [
-        // skills is array => MUST use elemMatch
-        { skills: { $elemMatch: { $regex: searchRegex } } },
+      if (skillsText) {
+        const keywords = skillsText
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
 
-        { title: { $regex: searchRegex } },
-        { bio: { $regex: searchRegex } },
+        geoQuery.$or = keywords.flatMap((word) => [
+          { skills: { $elemMatch: { $regex: word, $options: "i" } } },
+          { title: { $regex: word, $options: "i" } },
+          { bio: { $regex: word, $options: "i" } },
+        ]);
+      }
 
-        // portfolio is array of strings
-        { portfolio: { $elemMatch: { $regex: searchRegex } } },
-
-        // pastWorks is array of objects
-        { "pastWorks.title": { $regex: searchRegex } },
-        { "pastWorks.description": { $regex: searchRegex } },
-      ];
-    }
-
-    const freelancers = await Freelancer.aggregate([
-      {
-        $geoNear: {
-          near: { type: "Point", coordinates: [longitude, latitude] },
-          distanceField: "distanceMeters",
-          maxDistance: radiusKm * 1000,
-          spherical: true,
-          query: geoQuery,
+      freelancers = await Freelancer.aggregate([
+        {
+          $geoNear: {
+            near: { type: "Point", coordinates: [longitude, latitude] },
+            distanceField: "distanceMeters",
+            maxDistance: radiusKm * 1000,
+            spherical: true,
+            query: geoQuery,
+          },
         },
-      },
-
-      // ✅ add score so we can rank results intelligently
-      ...(searchRegex
-        ? [
-            {
-              $addFields: {
-                matchScore: {
-                  $add: [
-                    {
-                      $cond: [
-                        {
-                          $regexMatch: { input: "$title", regex: searchRegex },
-                        },
-                        6,
-                        0,
-                      ],
-                    },
-                    {
-                      $cond: [
-                        { $regexMatch: { input: "$bio", regex: searchRegex } },
-                        3,
-                        0,
-                      ],
-                    },
-                    {
-                      $cond: [
-                        {
-                          $gt: [
-                            {
-                              $size: {
-                                $filter: {
-                                  input: "$skills",
-                                  as: "s",
-                                  cond: {
-                                    $regexMatch: {
-                                      input: "$$s",
-                                      regex: searchRegex,
-                                    },
-                                  },
-                                },
-                              },
-                            },
-                            0,
-                          ],
-                        },
-                        10,
-                        0,
-                      ],
-                    },
-                  ],
-                },
-              },
+        { $sort: { distanceMeters: 1 } },
+        { $limit: 50 },
+        {
+          $lookup: {
+            from: "users",
+            localField: "user",
+            foreignField: "_id",
+            as: "user",
+          },
+        },
+        { $unwind: "$user" },
+        {
+          $project: {
+            title: 1,
+            bio: 1,
+            skills: 1,
+            hourlyRate: 1,
+            city: 1,
+            country: 1,
+            profilePic: 1,
+            location: 1,
+            category: 1,
+            distanceKm: {
+              $round: [{ $divide: ["$distanceMeters", 1000] }, 2],
             },
-            { $sort: { matchScore: -1, distanceMeters: 1 } },
-          ]
-        : [{ $sort: { distanceMeters: 1 } }]),
-
-      { $limit: 50 },
-
-      // populate user data
-      {
-        $lookup: {
-          from: "users",
-          localField: "user",
-          foreignField: "_id",
-          as: "user",
-        },
-      },
-      { $unwind: "$user" },
-
-      {
-        $project: {
-          title: 1,
-          bio: 1,
-          skills: 1,
-          hourlyRate: 1,
-          city: 1,
-          country: 1,
-          profilePic: 1,
-
-          // ✅ include location so frontend can render pins
-          location: 1,
-
-          distanceKm: {
-            $round: [{ $divide: ["$distanceMeters", 1000] }, 2],
-          },
-
-          user: {
-            _id: "$user._id",
-            name: "$user.name",
-            email: "$user.email",
+            user: {
+              _id: "$user._id",
+              name: "$user.name",
+              email: "$user.email",
+            },
           },
         },
-      },
-    ]);
+      ]);
+    }
 
-    // ✅ exclude self
-    const filtered = freelancers.filter(
+    // ==============================
+    // DIGITAL SERVICES SEARCH
+    // ==============================
+    else {
+      const textQuery = { category: "digital" };
+
+      if (skillsText) {
+        const keywords = skillsText
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        textQuery.$or = keywords.flatMap((word) => [
+          { skills: { $elemMatch: { $regex: word, $options: "i" } } },
+          { title: { $regex: word, $options: "i" } },
+          { bio: { $regex: word, $options: "i" } },
+        ]);
+      }
+
+      freelancers = await Freelancer.find(textQuery)
+        .limit(50)
+        .populate("user", "name email")
+        .select("title bio skills hourlyRate city country profilePic category");
+    }
+
+    // Exclude self
+    freelancers = freelancers.filter(
       (f) => f.user?._id?.toString() !== req.user._id.toString(),
     );
 
-    return res.json({ success: true, freelancers: filtered });
+    return res.json({ success: true, freelancers });
   } catch (err) {
-    console.error("❌ GEO SEARCH ERROR:", err);
+    console.error("❌ SEARCH ERROR:", err);
     return res.status(500).json({ msg: "Server error" });
   }
 });
@@ -284,19 +267,22 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ msg: "Freelancer not found" });
     }
 
-    const [lng, lat] = profile.location?.coordinates || [];
+    if (profile.category === "field") {
+      const [lng, lat] = profile.location?.coordinates || [];
 
-    if (!isValidCoordinates(lat, lng)) {
-      return res.status(403).json({
-        msg: "Freelancer profile is not active yet",
-      });
+      if (!isValidCoordinates(lat, lng)) {
+        return res.status(403).json({
+          msg: "Freelancer profile is not active yet",
+        });
+      }
     }
 
     res.json({
       success: true,
       profile: {
-        id: profile._id,
+        _id: profile._id,
         name: profile.user?.name,
+        category: profile.category,
         title: profile.title,
         bio: profile.bio,
         skills: profile.skills,

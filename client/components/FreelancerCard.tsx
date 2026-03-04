@@ -117,7 +117,9 @@ export default function FreelancerCard({ freelancer }: { freelancer: any }) {
 
           <div className="flex gap-3">
             <button
-              onClick={() => router.push(`/f/${freelancer._id}`)}
+              onClick={() =>
+                router.push(`/f/${freelancer.freelancerId || freelancer._id}`)
+              }
               className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-900 hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950 dark:text-white dark:hover:bg-white/5"
             >
               View Profile
