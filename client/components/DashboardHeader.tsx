@@ -344,10 +344,10 @@ export default function DashboardHeader() {
 
   const handleLogout = async () => {
     closeAllMenus();
-    try {
-      await logout();
-    } catch {}
-    window.location.href = "/login";
+    // logout() in UserContext now owns the redirect and socket teardown.
+    // Do NOT call window.location.href here — it would race with the
+    // redirect inside logout() and could navigate before the cookie is cleared.
+    await logout();
   };
 
   const handleSwitchRole = async () => {

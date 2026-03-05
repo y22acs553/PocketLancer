@@ -12,24 +12,43 @@ const router = express.Router();
 console.log("✅ auth routes loaded");
 
 // ── Helpers ────────────────────────────────────────────────────────
+
 const generateToken = (user) =>
   jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
     expiresIn: "7d",
   });
 
+/**
+ * Cookie options are extracted into a constant so that
+ * sendAuthCookie and clearAuthCookie ALWAYS use the same spec.
+ *
+ * ⚠️  ROOT CAUSE OF LOGOUT BUG:
+ * Express's res.clearCookie() only deletes a cookie if the options
+ * (secure, sameSite, path, domain) exactly match how it was SET.
+ * Previously clearCookie("token") used default options while the
+ * cookie was set with secure+sameSite — the browser treated them
+ * as different cookies and never deleted it. That left the JWT
+ * alive, so /auth/check-session kept returning a valid user, and
+ * the login page guard redirected straight back to /dashboard.
+ */
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  path: "/",
+};
+
 const sendAuthCookie = (res, token) =>
   res.cookie("token", token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    ...COOKIE_OPTIONS,
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   });
+
+// ✅ Uses identical options — browser now correctly matches and deletes the cookie
+const clearAuthCookie = (res) => res.clearCookie("token", COOKIE_OPTIONS);
 
 /**
  * Single source of truth for the user shape sent to the client.
- * protect middleware does User.findById().select("-password") so
- * req.user already carries honorScore — it was just being dropped
- * when each endpoint manually built its own response object.
  */
 const serialize = (u) => ({
   _id: u._id,
@@ -112,8 +131,10 @@ router.get("/check-session", protect, (req, res) => {
 });
 
 // ── 4. LOGOUT ──────────────────────────────────────────────────────
+// ✅ FIXED: clearAuthCookie uses identical options to sendAuthCookie
+// so the browser correctly deletes the JWT cookie instead of ignoring it.
 router.post("/logout", (req, res) => {
-  res.clearCookie("token");
+  clearAuthCookie(res);
   res.json({ success: true, msg: "Logged out successfully" });
 });
 
