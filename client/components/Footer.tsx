@@ -1,19 +1,53 @@
 import Link from "next/link";
 
 export default function Footer() {
-    return (
-        <footer className="bg-gray-800 text-white mt-auto">
-            <div className="container mx-auto px-4 py-8 text-center">
-                <div className="flex flex-col md:flex-row justify-center gap-6 mb-6 text-sm">
-                    <Link href="/terms">Terms</Link>
-                    <Link href="/privacy">Privacy</Link>
-                    <Link href="/freelancer/availability">For Freelancers</Link>
-                </div>
-
-                <p className="text-gray-400 text-sm">
-                    © {new Date().getFullYear()} PocketLancer
-                </p>
+  return (
+    <footer className="border-t border-slate-200 bg-white dark:border-white/10 dark:bg-slate-950">
+      <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-between">
+          {/* Brand */}
+          <div className="flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-xl bg-slate-900 text-white flex items-center justify-center font-black text-sm dark:bg-white dark:text-slate-900">
+              P
             </div>
-        </footer>
-    );
+            <div className="leading-tight">
+              <p className="font-black text-slate-900 dark:text-white text-sm">
+                PocketLancer
+              </p>
+              <p className="text-[10px] font-bold text-slate-500">
+                Hire trusted freelancers
+              </p>
+            </div>
+          </div>
+
+          {/* Links */}
+          <nav className="flex items-center gap-6 text-xs font-bold text-slate-500 dark:text-slate-400">
+            <Link
+              href="/terms"
+              className="hover:text-slate-900 dark:hover:text-white transition"
+            >
+              Terms
+            </Link>
+            <Link
+              href="/privacy"
+              className="hover:text-slate-900 dark:hover:text-white transition"
+            >
+              Privacy
+            </Link>
+            <Link
+              href="/freelancer/availability"
+              className="hover:text-slate-900 dark:hover:text-white transition"
+            >
+              For Freelancers
+            </Link>
+          </nav>
+
+          {/* Copyright */}
+          <p className="text-xs font-bold text-slate-400 dark:text-slate-500">
+            © {new Date().getFullYear()} PocketLancer
+          </p>
+        </div>
+      </div>
+    </footer>
+  );
 }

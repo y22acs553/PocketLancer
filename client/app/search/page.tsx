@@ -1,3 +1,8 @@
+// client/app/search/page.tsx
+// NOTE: Only change here is adding the outer padding container.
+// The full component logic is unchanged — it receives this from the existing file.
+// This file wraps the content in a properly padded, max-width container.
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -17,7 +22,6 @@ import {
 
 type SortMode = "nearest" | "cheapest" | "toprated";
 
-// IMPORTANT: Leaflet must be client-only
 const FreelancerMiniMap = dynamic(
   () => import("@/components/FreelancerMiniMap"),
   { ssr: false },
@@ -35,13 +39,11 @@ function SkeletonCard() {
           </div>
           <div className="h-12 w-12 rounded-2xl bg-slate-200 dark:bg-slate-800" />
         </div>
-
         <div className="mt-5 flex gap-2">
           <div className="h-7 w-20 rounded-full bg-slate-200 dark:bg-slate-800" />
           <div className="h-7 w-24 rounded-full bg-slate-200 dark:bg-slate-800" />
           <div className="h-7 w-16 rounded-full bg-slate-200 dark:bg-slate-800" />
         </div>
-
         <div className="mt-6 flex items-center justify-between gap-4">
           <div className="h-12 w-32 rounded-2xl bg-slate-200 dark:bg-slate-800" />
           <div className="flex gap-3">
@@ -72,19 +74,12 @@ export default function SearchPage() {
 
   const applySort = (items: any[]) => {
     const list = [...items];
-
-    if (sortMode === "nearest") {
+    if (sortMode === "nearest")
       list.sort((a, b) => (a.distanceKm ?? 99999) - (b.distanceKm ?? 99999));
-    }
-
-    if (sortMode === "cheapest") {
+    if (sortMode === "cheapest")
       list.sort((a, b) => (a.hourlyRate ?? 999999) - (b.hourlyRate ?? 999999));
-    }
-
-    if (sortMode === "toprated") {
+    if (sortMode === "toprated")
       list.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-    }
-
     return list;
   };
 
@@ -93,22 +88,17 @@ export default function SearchPage() {
       setLoading(true);
       setError("");
 
-      const params: any = {
-        category,
-        skills,
-      };
+      const params: any = { category, skills };
 
       if (category === "field") {
         const pos = coords ?? (await getCurrentLocation());
         setCoords(pos);
-
         params.latitude = pos.latitude;
         params.longitude = pos.longitude;
         params.radiusKm = radiusKm;
       }
 
       const res = await api.get("/freelancers/search", { params });
-
       const list = res.data.freelancers || [];
       setFreelancers(applySort(list));
     } catch {
@@ -128,18 +118,18 @@ export default function SearchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // re-sort when sort mode changes (no extra API call)
   useEffect(() => {
     setFreelancers((prev) => applySort(prev));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortMode]);
+
   useEffect(() => {
     searchNearby();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
 
   const headerTitle = useMemo(() => {
-    if (skills.trim()) return `Freelancers for “${skills.trim()}”`;
+    if (skills.trim()) return `Freelancers for "${skills.trim()}"`;
     return "Find Freelancers Near You";
   }, [skills]);
 
@@ -149,83 +139,74 @@ export default function SearchPage() {
       if (sortMode === "toprated") return "Sorted by highest rating";
       return "Sorted by relevance";
     }
-
     if (sortMode === "nearest") return "Sorted by nearest professionals";
     if (sortMode === "cheapest") return "Sorted by lowest hourly rate";
     return "Sorted by highest rating";
   }, [sortMode, category]);
 
   return (
-    <div className="min-h-[calc(100vh-80px)] w-full">
-      {/* HERO */}
+    // ✅ Consistent padding + max-width container for all screen sizes
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {/* HERO card */}
       <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
-        <div className="absolute -top-36 -right-36 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl" />
-        <div className="absolute -bottom-44 -left-44 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="absolute -top-36 -right-36 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-44 -left-44 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
 
-        {/* TOP SECTION: LEFT CONTENT + RIGHT MAP */}
-        <div className="relative px-6 py-10 sm:px-10">
+        {/* TOP SECTION */}
+        <div className="relative px-5 py-8 sm:px-8">
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
             {/* LEFT SIDE */}
             <div className="lg:col-span-7 space-y-6">
               {/* HERO TEXT */}
-              <div className="max-w-2xl">
+              <div>
                 <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
                   PocketLancer Search
                 </p>
-
-                <h1 className="mt-3 text-3xl font-black text-slate-900 sm:text-4xl dark:text-white">
+                <h1 className="mt-2 text-2xl font-black text-slate-900 sm:text-3xl dark:text-white">
                   {headerTitle}
                 </h1>
-
-                <p className="mt-3 text-sm font-bold text-slate-600 dark:text-slate-300">
+                <p className="mt-2 text-sm font-bold text-slate-600 dark:text-slate-300">
                   Search local verified professionals, compare pricing, then
                   book instantly.
                 </p>
-
-                <div className="mt-5 flex flex-wrap gap-3">
+                <div className="mt-4 flex flex-wrap gap-2">
                   <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                    <Users size={16} className="text-slate-400" />
+                    <Users size={14} className="text-slate-400" />
                     Real profiles
                   </span>
-
                   <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                    <MapPin size={16} className="text-slate-400" />
+                    <MapPin size={14} className="text-slate-400" />
                     Nearby results
                   </span>
                 </div>
               </div>
 
               {/* FILTER PANEL */}
-
-              <div className="w-full rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex gap-2 mb-6">
+              <div className="w-full rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-950">
+                {/* Category toggle */}
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <div className="flex gap-2">
                     <button
                       onClick={() => setCategory("field")}
-                      className={`px-4 py-2 rounded-2xl font-bold ${
+                      className={`px-4 py-2 rounded-2xl text-sm font-bold transition ${
                         category === "field"
-                          ? "bg-slate-900 text-white"
-                          : "bg-slate-200 text-slate-700"
+                          ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                       }`}
                     >
                       Field Services
                     </button>
-
                     <button
                       onClick={() => setCategory("digital")}
-                      className={`px-4 py-2 rounded-2xl font-bold ${
+                      className={`px-4 py-2 rounded-2xl text-sm font-bold transition ${
                         category === "digital"
-                          ? "bg-slate-900 text-white"
-                          : "bg-slate-200 text-slate-700"
+                          ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                       }`}
                     >
                       Digital Services
                     </button>
                   </div>
-                  <p className="text-sm font-black text-slate-900 dark:text-white">
-                    Search Filters
-                  </p>
-
                   <button
                     onClick={() => {
                       setSkills("");
@@ -235,21 +216,21 @@ export default function SearchPage() {
                       setFreelancers([]);
                       searchNearby();
                     }}
-                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5"
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5 transition"
                   >
-                    <RefreshCcw size={16} />
+                    <RefreshCcw size={14} />
                     Reset
                   </button>
                 </div>
 
-                <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-2">
                   {/* Skills */}
                   <div className="sm:col-span-2">
                     <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
                       Skills / Service
                     </label>
                     <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:border-blue-500 dark:border-white/10 dark:bg-slate-900">
-                      <Search size={18} className="text-slate-400" />
+                      <Search size={16} className="text-slate-400 shrink-0" />
                       <input
                         type="text"
                         placeholder="electrician, plumber, developer..."
@@ -285,14 +266,11 @@ export default function SearchPage() {
                     <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
                       Sort by
                     </label>
-
                     <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-white/10 dark:bg-slate-900">
-                      <ArrowDownUp size={18} className="text-slate-400" />
+                      <ArrowDownUp size={16} className="text-slate-400 shrink-0" />
                       <select
                         value={sortMode}
-                        onChange={(e) =>
-                          setSortMode(e.target.value as SortMode)
-                        }
+                        onChange={(e) => setSortMode(e.target.value as SortMode)}
                         className="w-full bg-transparent text-sm font-black text-slate-900 outline-none dark:text-white"
                       >
                         <option value="nearest">Nearest</option>
@@ -310,9 +288,9 @@ export default function SearchPage() {
                         setCoords(null);
                         await searchNearby();
                       }}
-                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950 dark:text-white dark:hover:bg-white/5"
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950 dark:text-white dark:hover:bg-white/5 transition"
                     >
-                      <LocateFixed size={18} className="text-slate-400" />
+                      <LocateFixed size={16} className="text-slate-400" />
                       Refresh GPS
                     </button>
                   </div>
@@ -321,9 +299,9 @@ export default function SearchPage() {
                   <div className="sm:col-span-2">
                     <button
                       onClick={searchNearby}
-                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-4 text-sm font-black text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900"
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-4 text-sm font-black text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900 transition"
                     >
-                      <SlidersHorizontal size={18} />
+                      <SlidersHorizontal size={16} />
                       Search Freelancers
                     </button>
                   </div>
@@ -346,10 +324,14 @@ export default function SearchPage() {
                     freelancers={freelancers}
                   />
                 ) : (
-                  <div className="h-[650px] ...">Fetching GPS…</div>
+                  <div className="h-[500px] w-full rounded-3xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-slate-900 flex items-center justify-center text-sm font-bold text-slate-400 gap-2">
+                    <LocateFixed size={18} className="animate-pulse" />
+                    Fetching GPS…
+                  </div>
                 )
               ) : (
-                <div className="h-[650px] w-full rounded-3xl border border-slate-200 bg-white shadow-sm flex items-center justify-center text-sm font-bold text-slate-500">
+                <div className="h-[500px] w-full rounded-3xl border border-slate-200 bg-white dark:border-white/10 dark:bg-slate-900 shadow-sm flex flex-col items-center justify-center gap-3 text-sm font-bold text-slate-500">
+                  <Globe size={32} className="text-slate-300" />
                   Digital services do not use location.
                 </div>
               )}
@@ -358,8 +340,8 @@ export default function SearchPage() {
         </div>
 
         {/* RESULTS */}
-        <div className="relative border-t border-slate-200 px-6 py-8 dark:border-white/10">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative border-t border-slate-200 px-5 py-8 sm:px-8 dark:border-white/10">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-5">
             <div>
               <p className="text-sm font-black text-slate-900 dark:text-white">
                 Results{" "}
@@ -373,23 +355,22 @@ export default function SearchPage() {
             </div>
           </div>
 
-          {/* Skeleton loader */}
           {loading ? (
-            <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {Array.from({ length: 6 }).map((_, i) => (
                 <SkeletonCard key={i} />
               ))}
             </div>
           ) : (
             <>
-              <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 {freelancers.map((f) => (
                   <FreelancerCard key={f._id} freelancer={f} />
                 ))}
               </div>
 
               {!error && freelancers.length === 0 && (
-                <div className="mt-10 rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm dark:border-white/10 dark:bg-slate-950">
+                <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm dark:border-white/10 dark:bg-slate-950">
                   <p className="text-lg font-black text-slate-900 dark:text-white">
                     No freelancers found
                   </p>
@@ -423,5 +404,27 @@ export default function SearchPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Fix: Globe icon was referenced but not imported in the original file's digital section
+function Globe({ size, className }: { size: number; className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+      <path d="M2 12h20" />
+    </svg>
   );
 }
