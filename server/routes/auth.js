@@ -94,6 +94,7 @@ router.post("/login", async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phone: user.phone || "",
         role: user.role,
       },
     });
@@ -112,6 +113,7 @@ router.get("/me", protect, async (req, res) => {
       _id: req.user._id,
       name: req.user.name,
       email: req.user.email,
+      phone: req.user.phone || "",
       role: req.user.role,
     },
   });
@@ -126,6 +128,7 @@ router.get("/check-session", protect, async (req, res) => {
       _id: req.user._id,
       name: req.user.name,
       email: req.user.email,
+      phone: req.user.phone || "",
       role: req.user.role,
     },
   });
@@ -161,6 +164,7 @@ router.post("/switch-role", protect, async (req, res) => {
         id: req.user._id,
         name: req.user.name,
         email: req.user.email,
+        phone: req.user.phone || "",
         role: req.user.role,
       },
     });

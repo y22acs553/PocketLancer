@@ -163,6 +163,9 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       portfolio,
       pastWorks,
       category,
+      bankDetails,
+      dateOfBirth,
+      phone,
     } = req.body;
 
     if (category && !["field", "digital"].includes(category)) {
@@ -193,6 +196,8 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       portfolio,
       pastWorks,
       category,
+      bankDetails,
+      dateOfBirth: dateOfBirth || null,
     };
 
     if (category === "digital") {
@@ -211,6 +216,11 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       updateData,
       { new: true, upsert: true },
     );
+
+    if (phone !== undefined) {
+      req.user.phone = phone;
+      await req.user.save();
+    }
 
     return res.json({ success: true, profile });
   } catch (err) {
@@ -306,7 +316,12 @@ router.get("/search", protect, async (req, res) => {
     // DIGITAL SERVICES SEARCH
     // ==============================
     else {
-      const textQuery = { category: "digital" };
+      const textQuery = {
+        category: "digital",
+        // Require bank details for digital workers to appear in search
+        "bankDetails.accountNumber": { $exists: true, $ne: "" },
+        "bankDetails.ifscCode": { $exists: true, $ne: "" },
+      };
 
       if (skillsText) {
         const skillQuery = buildSkillQuery(skillsText);
@@ -345,7 +360,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ msg: "Freelancer not found" });
     }
 
-    const profile = await Freelancer.findById(id).populate("user", "name");
+    const profile = await Freelancer.findById(id).populate("user", "name honorScore");
 
     if (!profile) {
       return res.status(404).json({ msg: "Freelancer not found" });
@@ -366,6 +381,7 @@ router.get("/:id", async (req, res) => {
         _id: profile._id,
         userId: profile.user?._id, // ← User._id for chat (different from Freelancer._id)
         name: profile.user?.name,
+        honorScore: profile.user?.honorScore,
         category: profile.category,
         title: profile.title,
         bio: profile.bio,

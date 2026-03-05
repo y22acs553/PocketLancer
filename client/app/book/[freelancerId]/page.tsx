@@ -119,6 +119,9 @@ export default function BookFreelancerPage() {
 
   const canSubmit = useMemo(() => {
     if (submitting || !serviceType.trim()) return false;
+    // Phone must be added for digital bookings (payment required)
+    if (isDigital && (!user?.phone || !user.phone.trim())) return false;
+
     if (!isDigital) return !!(preferredDate && preferredTime && address.trim());
     if (isHourlyDigital) {
       if (digitalPayMode === "advance")
@@ -137,6 +140,7 @@ export default function BookFreelancerPage() {
     digitalPayMode,
     estimatedHours,
     freelancer,
+    user?.phone,
   ]);
 
   // ── Digital booking handler ──────────────────────────
@@ -174,7 +178,11 @@ export default function BookFreelancerPage() {
           name: "PocketLancer",
           description: `Booking: ${serviceType}`,
           order_id: razorpayOrderId,
-          prefill: { name: user?.name || "", email: user?.email || "" },
+          prefill: {
+            name: user?.name || "",
+            email: user?.email || "",
+            contact: user?.phone || "",
+          },
           theme: { color: "#7c3aed" },
           handler: async (response: any) => {
             setPaymentPhase("verifying");
@@ -617,6 +625,33 @@ export default function BookFreelancerPage() {
               {error && (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                   {error}
+                </div>
+              )}
+
+              {/* Phone Warning for Digital Bookings */}
+              {isDigital && (!user?.phone || !user.phone.trim()) && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-500/20 dark:bg-amber-500/10 mb-4">
+                  <div className="flex items-start gap-3">
+                    <ShieldCheck
+                      size={18}
+                      className="mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400"
+                    />
+                    <div>
+                      <p className="text-sm font-black text-amber-900 dark:text-amber-100">
+                        Mobile Number Required
+                      </p>
+                      <p className="mt-1 text-xs font-bold leading-relaxed text-amber-700 dark:text-amber-300">
+                        Please update your profile with a valid mobile number before making a payment.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => router.push("/client/profile")}
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-black text-white hover:bg-amber-700"
+                      >
+                        Update Profile
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 

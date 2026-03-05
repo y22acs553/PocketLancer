@@ -109,8 +109,8 @@ export default function ChatWindow({
       setError("Only image files are allowed");
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      setError("Image must be under 5 MB");
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Image must be under 10 MB");
       return;
     }
     setSelectedImage(file);

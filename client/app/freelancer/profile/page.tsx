@@ -77,6 +77,7 @@ type Profile = {
   pastWorks?: PastWork[];
   bankDetails?: BankDetails;
   dateOfBirth?: string;
+  phone?: string;
 };
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -136,6 +137,7 @@ export default function FreelancerProfilePage() {
           dateOfBirth: loaded?.dateOfBirth
             ? new Date(loaded.dateOfBirth).toISOString().split("T")[0]
             : "",
+          phone: loaded?.user?.phone || user?.phone || "",
         });
         const hasCoords = loaded?.latitude != null && loaded?.longitude != null;
         setLocationStatus(hasCoords ? "ready" : "idle");
@@ -167,6 +169,7 @@ export default function FreelancerProfilePage() {
             upiId: "",
           },
           dateOfBirth: "",
+          phone: user?.phone || "",
         }),
       );
   }, [user]);
@@ -180,6 +183,11 @@ export default function FreelancerProfilePage() {
       .finally(() => setLoadingReviews(false));
   }, [profile?._id]);
   const uploadProfilePic = async (file: File) => {
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Profile picture must be smaller than 5MB.");
+      return;
+    }
+    
     try {
       setUploadingPic(true);
       const form = new FormData();
@@ -413,9 +421,27 @@ export default function FreelancerProfilePage() {
               <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-900 dark:text-white md:text-4xl">
                 Edit Your Profile
               </h1>
-              <p className="mt-1 text-sm font-bold text-slate-500 dark:text-slate-400">
+              <p className="mt-1 text-sm font-bold text-slate-500 dark:text-slate-400 mb-3">
                 Complete profile · Stand out in search · Get more bookings
               </p>
+              {user?.honorScore !== undefined && (
+                <div className="mt-2 inline-flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-black ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Your Honor Score:
+                  </span>
+                  <span
+                    className={`rounded-lg px-2 py-0.5 ${
+                      user.honorScore < 35
+                        ? "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200"
+                        : user.honorScore < 75
+                          ? "bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-200"
+                          : "bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-200"
+                    }`}
+                  >
+                    {user.honorScore} / 100
+                  </span>
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap gap-3">
               <button
@@ -663,19 +689,38 @@ export default function FreelancerProfilePage() {
                 </div>
               </div>
 
-              {/* Date of Birth */}
-              <div className="mt-5">
-                <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
-                  Date of Birth
-                </label>
-                <input
-                  type="date"
-                  className={FIELD}
-                  value={profile.dateOfBirth || ""}
-                  onChange={(e) =>
-                    setProfile({ ...profile, dateOfBirth: e.target.value })
-                  }
-                />
+              <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-2">
+                {/* Phone Number */}
+                <div>
+                  <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                    Phone Number <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    className={FIELD}
+                    placeholder="e.g. 9876543210"
+                    value={profile.phone || ""}
+                    onChange={(e) =>
+                      setProfile({ ...profile, phone: e.target.value })
+                    }
+                    required
+                  />
+                </div>
+
+                {/* Date of Birth */}
+                <div>
+                  <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                    Date of Birth
+                  </label>
+                  <input
+                    type="date"
+                    className={FIELD}
+                    value={profile.dateOfBirth || ""}
+                    onChange={(e) =>
+                      setProfile({ ...profile, dateOfBirth: e.target.value })
+                    }
+                  />
+                </div>
               </div>
             </div>
             {/* Bio */}

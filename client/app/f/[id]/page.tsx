@@ -52,9 +52,9 @@ type Profile = {
   hourlyRate: number;
   city: string;
   country: string;
-  profilePic?: string;
   portfolio?: string[];
   pastWorks?: PastWork[];
+  honorScore?: number;
 };
 
 export default function PublicFreelancerProfilePage() {
@@ -166,9 +166,25 @@ export default function PublicFreelancerProfilePage() {
     <div className="mx-auto max-w-7xl p-6">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-          {profile.name}
-        </h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
+            {profile.name}
+          </h1>
+          {profile.honorScore !== undefined && (
+            <span
+              title="Honor Score"
+              className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black ring-1 ${
+                profile.honorScore < 35
+                  ? "bg-red-50 text-red-700 ring-red-100 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-500/20"
+                  : profile.honorScore < 75
+                    ? "bg-orange-50 text-orange-700 ring-orange-100 dark:bg-orange-500/10 dark:text-orange-200 dark:ring-orange-500/20"
+                    : "bg-green-50 text-green-700 ring-green-100 dark:bg-green-500/10 dark:text-green-200 dark:ring-green-500/20"
+              }`}
+            >
+              Score: {profile.honorScore}
+            </span>
+          )}
+        </div>
         <p className="text-slate-500 mt-2">Freelancer profile</p>
       </div>
 

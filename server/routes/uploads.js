@@ -16,45 +16,52 @@ router.post(
   "/profile-pic",
   protect,
   authorize("freelancer"),
-  upload.single("image"),
-  async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ msg: "No file uploaded" });
+  (req, res) => {
+    upload.single("image")(req, res, async (err) => {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ msg: "File size exceeds 5MB limit." });
+      } else if (err) {
+        return res.status(400).json({ msg: "File upload error." });
       }
 
-      // ✅ Find freelancer in a flexible way
-      const freelancer =
-        (await Freelancer.findOne({ user: req.user._id })) ||
-        (await Freelancer.findOne({ userId: req.user._id })) ||
-        (await Freelancer.findOne({ email: req.user.email }));
+      try {
+        if (!req.file) {
+          return res.status(400).json({ msg: "No file uploaded" });
+        }
 
-      if (!freelancer) {
-        return res.status(404).json({
-          msg: "Freelancer profile not found. Create freelancer profile first.",
+        // ✅ Find freelancer in a flexible way
+        const freelancer =
+          (await Freelancer.findOne({ user: req.user._id })) ||
+          (await Freelancer.findOne({ userId: req.user._id })) ||
+          (await Freelancer.findOne({ email: req.user.email }));
+
+        if (!freelancer) {
+          return res.status(404).json({
+            msg: "Freelancer profile not found. Create freelancer profile first.",
+          });
+        }
+
+        // ✅ Convert buffer to base64
+        const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
+          "base64",
+        )}`;
+
+        const result = await cloudinary.uploader.upload(base64, {
+          folder: "pocketlancer/profile-pics",
+          transformation: [
+            { width: 400, height: 400, crop: "fill", gravity: "face" },
+          ],
         });
+
+        freelancer.profilePic = result.secure_url;
+        await freelancer.save();
+
+        return res.json({ success: true, profilePic: freelancer.profilePic });
+      } catch (err) {
+        console.error("UPLOAD PROFILE PIC ERROR:", err);
+        return res.status(500).json({ msg: "Upload failed" });
       }
-
-      // ✅ Convert buffer to base64
-      const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
-        "base64",
-      )}`;
-
-      const result = await cloudinary.uploader.upload(base64, {
-        folder: "pocketlancer/profile-pics",
-        transformation: [
-          { width: 400, height: 400, crop: "fill", gravity: "face" },
-        ],
-      });
-
-      freelancer.profilePic = result.secure_url;
-      await freelancer.save();
-
-      return res.json({ success: true, profilePic: freelancer.profilePic });
-    } catch (err) {
-      console.error("UPLOAD PROFILE PIC ERROR:", err);
-      return res.status(500).json({ msg: "Upload failed" });
-    }
+    });
   },
 );
 router.delete(

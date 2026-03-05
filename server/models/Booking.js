@@ -133,7 +133,8 @@ const BookingSchema = new mongoose.Schema(
     refundedAt: { type: Date },
 
     /** Auto-release timer — if client doesn't act within N days after completion */
-    autoReleaseAt: { type: Date },
+    autoReleaseAt: { type: Date }, // for cron job
+    deadline: { type: Date }, // auto‑refund deadline for digital bookings
   },
   { timestamps: true },
 );

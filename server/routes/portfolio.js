@@ -12,7 +12,10 @@ const router = express.Router();
 /* =====================================
    Multer Memory Storage
 ===================================== */
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+});
 
 /* =====================================
    Cloudinary Upload Helper
@@ -39,45 +42,53 @@ const uploadFromBuffer = (buffer) => {
 Add Portfolio Item
 =====================================
 */
-router.post("/", protect, upload.single("file"), async (req, res) => {
-  try {
-    const { type, title, description, websiteUrl } = req.body;
+router.post("/", protect, (req, res) => {
+  upload.single("file")(req, res, async (err) => {
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ msg: "File size exceeds 10MB limit." });
+    } else if (err) {
+      return res.status(400).json({ msg: "File upload error." });
+    }
 
-    let url = websiteUrl;
-    let publicId = null;
+    try {
+      const { type, title, description, websiteUrl } = req.body;
 
-    if (type !== "website") {
-      if (!req.file) {
-        return res.status(400).json({ msg: "File required" });
+      let url = websiteUrl;
+      let publicId = null;
+
+      if (type !== "website") {
+        if (!req.file) {
+          return res.status(400).json({ msg: "File required" });
+        }
+
+        const result = await uploadFromBuffer(req.file.buffer);
+
+        url = result.secure_url;
+        publicId = result.public_id;
       }
 
-      const result = await uploadFromBuffer(req.file.buffer);
+      // Find freelancer profile linked to this user
+      const freelancer = await Freelancer.findOne({ user: req.user._id });
 
-      url = result.secure_url;
-      publicId = result.public_id;
+      if (!freelancer) {
+        return res.status(404).json({ msg: "Freelancer profile not found" });
+      }
+
+      const item = await PortfolioItem.create({
+        freelancer: freelancer._id, // ✅ correct id
+        type,
+        title,
+        description,
+        url,
+        publicId,
+      });
+
+      res.json(item);
+    } catch (err) {
+      console.error("PORTFOLIO UPLOAD ERROR:", err);
+      res.status(500).json({ msg: "Upload failed" });
     }
-
-    // Find freelancer profile linked to this user
-    const freelancer = await Freelancer.findOne({ user: req.user._id });
-
-    if (!freelancer) {
-      return res.status(404).json({ msg: "Freelancer profile not found" });
-    }
-
-    const item = await PortfolioItem.create({
-      freelancer: freelancer._id, // ✅ correct id
-      type,
-      title,
-      description,
-      url,
-      publicId,
-    });
-
-    res.json(item);
-  } catch (err) {
-    console.error("PORTFOLIO UPLOAD ERROR:", err);
-    res.status(500).json({ msg: "Upload failed" });
-  }
+  });
 });
 
 /*

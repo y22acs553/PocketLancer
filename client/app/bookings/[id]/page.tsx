@@ -223,7 +223,11 @@ export default function BookingDetailPage() {
           await fetchBooking();
           showToast("Payment successful! Funds held in escrow.");
         },
-        prefill: { name: user?.name, email: user?.email },
+        prefill: {
+          name: user?.name,
+          email: user?.email,
+          contact: user?.phone,
+        },
         theme: { color: "#0f172a" },
       });
       rzp.open();

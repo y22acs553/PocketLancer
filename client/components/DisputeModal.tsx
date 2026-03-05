@@ -55,6 +55,11 @@ export default function DisputeModal({
       return;
     }
 
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Evidence file must be smaller than 10MB.");
+      return;
+    }
+
     try {
       setError(null);
       setLoading(true);

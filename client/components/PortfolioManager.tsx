@@ -78,7 +78,9 @@ export default function PortfolioManager() {
     }
 
     if (file && file.size > 10 * 1024 * 1024) {
-      alert("File must be smaller than 10MB.");
+      alert(
+        "File must be smaller than 10MB. For larger media, please upload to Google Drive or YouTube and use the 'Website' link option.",
+      );
       return;
     }
 
@@ -166,7 +168,13 @@ export default function PortfolioManager() {
           Digital Portfolio
         </h3>
         <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-400">
-          Upload visuals, videos, or add external project links.
+          Upload visuals or add external project links.
+          <br />
+          <span className="text-amber-600 dark:text-amber-500 font-bold mt-1 inline-block">
+            Note: Direct uploads are limited to 10MB. For larger media (like
+            videos), please add a Google Drive or YouTube link using the
+            "Website" option.
+          </span>
         </p>
       </header>
 

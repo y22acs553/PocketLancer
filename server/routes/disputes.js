@@ -19,7 +19,7 @@ const razorpay = new Razorpay({
 });
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 4 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
 });
 
 // GET /api/disputes (admin)
@@ -152,12 +152,21 @@ router.post("/", protect, async (req, res) => {
 router.post(
   "/:id/evidence",
   protect,
-  upload.single("file"),
+  (req, res, next) => {
+    upload.single("file")(req, res, (err) => {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ msg: "Evidence file size exceeds 10MB limit." });
+      } else if (err) {
+        return res.status(400).json({ msg: "Upload error: " + err.message });
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
       const dispute = await Dispute.findById(req.params.id);
       if (!dispute) return res.status(404).json({ msg: "Dispute not found" });
-      if (!req.file) return res.status(400).json({ msg: "No file" });
+      if (!req.file) return res.status(400).json({ msg: "No file uploaded" });
       const b64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
       const result = await cloudinary.uploader.upload(b64, {
         folder: "pocketlancer/disputes",

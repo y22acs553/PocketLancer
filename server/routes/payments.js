@@ -169,18 +169,29 @@ router.post(
         return res.status(400).json({ msg: "Escrow not in held state" });
       }
 
-      /**
-       * TODO: Wire up Razorpay Route Transfer here when freelancers
-       * are onboarded to Razorpay Route (linked accounts):
-       *
-       * await razorpay.payments.transfer(booking.razorpayPaymentId, {
-       *   transfers: [{
-       *     account: freelancer.razorpayAccountId,
-       *     amount: booking.escrowAmount * 100,
-       *     currency: "INR",
-       *   }]
-       * });
-       */
+      // Razorpay Route Transfer: Physically move money to freelancer
+      if (booking.freelancerId.razorpayAccountId) {
+        try {
+          await razorpay.payments.transfer(booking.razorpayPaymentId, {
+            transfers: [
+              {
+                account: booking.freelancerId.razorpayAccountId,
+                amount: booking.escrowAmount * 100, // Amount in paise
+                currency: "INR",
+              },
+            ],
+          });
+        } catch (transferErr) {
+          console.error("RAZORPAY TRANSFER ERROR:", transferErr);
+          return res.status(500).json({
+            msg: "Failed to transfer funds to freelancer. Please verify their linked Razorpay account.",
+          });
+        }
+      } else {
+        console.warn(
+          `Booking ${booking._id}: Full release triggered, but freelancer ${booking.freelancerId._id} has no razorpayAccountId. Admin must settle manually.`,
+        );
+      }
 
       booking.paymentStatus = "released";
       booking.releasedAmount = booking.escrowAmount;
@@ -279,6 +290,32 @@ router.post(
 
       milestone.status = "released";
       milestone.releasedAt = new Date();
+
+      // Razorpay Route Transfer for the specific milestone amount
+      const freelancer = await Freelancer.findById(booking.freelancerId);
+      
+      if (freelancer && freelancer.razorpayAccountId) {
+        try {
+          await razorpay.payments.transfer(booking.razorpayPaymentId, {
+            transfers: [
+              {
+                account: freelancer.razorpayAccountId,
+                amount: milestone.amount * 100, // Amount in paise
+                currency: "INR",
+              },
+            ],
+          });
+        } catch (transferErr) {
+          console.error("RAZORPAY MILESTONE TRANSFER ERROR:", transferErr);
+          return res.status(500).json({
+            msg: "Failed to transfer milestone funds to freelancer. Please verify their linked Razorpay account.",
+          });
+        }
+      } else {
+        console.warn(
+          `Booking ${booking._id}: Milestone release triggered, but freelancer has no razorpayAccountId. Admin must settle manually.`,
+        );
+      }
 
       booking.releasedAmount = (booking.releasedAmount || 0) + milestone.amount;
 

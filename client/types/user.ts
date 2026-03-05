@@ -3,4 +3,6 @@ export interface User {
   name: string;
   email: string;
   role: "client" | "freelancer" | "admin";
+  phone?: string;
+  honorScore?: number;
 }

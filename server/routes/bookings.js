@@ -159,9 +159,18 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       return res.status(400).json({ msg: "Missing required fields" });
     }
 
-    const freelancer = await Freelancer.findById(freelancer_id);
+    const freelancer = await Freelancer.findById(freelancer_id).populate(
+      "user",
+      "phone",
+    );
     if (!freelancer)
       return res.status(404).json({ msg: "Freelancer not found" });
+
+    if (!freelancer.user?.phone || !freelancer.user.phone.trim()) {
+      return res.status(400).json({
+        msg: "This freelancer has not added their mobile number yet and cannot receive bookings.",
+      });
+    }
 
     const isDigital = freelancer.category === "digital";
 
@@ -272,6 +281,7 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       milestones,
       bookingMode,
       paymentStatus: isDigital ? "unpaid" : "field_pending",
+      deadline: isDigital ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) : undefined,
     });
 
     await sendBookingCreated(freelancer.user, booking._id, {

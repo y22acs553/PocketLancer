@@ -45,6 +45,10 @@ const UserSchema = new mongoose.Schema(
       enum: ["client", "freelancer", "admin"],
       default: "client",
     },
+
+    // ── Honor Score ──────────────────────────────────────────
+    // Tracks user reliability (100 = perfect, < 35 = unreliable)
+    honorScore: { type: Number, default: 100, min: 0, max: 100 },
   },
   { timestamps: true },
 );

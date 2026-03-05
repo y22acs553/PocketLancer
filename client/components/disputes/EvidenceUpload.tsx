@@ -7,6 +7,11 @@ export default function EvidenceUpload({ disputeId }: { disputeId: string }) {
   const [uploading, setUploading] = useState(false);
 
   const uploadFile = async (file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      alert("Evidence file must be smaller than 10MB.");
+      return;
+    }
+
     setUploading(true);
 
     const form = new FormData();
