@@ -1,15 +1,11 @@
+// server/models/Booking.js
 import mongoose from "mongoose";
 
-/**
- * Booking Milestone
- * Copied from freelancer's template at booking creation.
- * Each milestone is paid independently via escrow.
- */
 const BookingMilestoneSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
     description: { type: String, default: "" },
-    amount: { type: Number, required: true }, // ₹ for this milestone
+    amount: { type: Number, required: true },
     order: { type: Number, default: 0 },
     status: {
       type: String,
@@ -29,7 +25,6 @@ const BookingSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-
     freelancerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Freelancer",
@@ -39,35 +34,28 @@ const BookingSchema = new mongoose.Schema(
     serviceType: { type: String, required: true, trim: true },
     issueDescription: { type: String, trim: true, default: "" },
 
-    // ── Service category snapshot ──────────────────────
-    /**
-     * "digital" → paid via escrow at booking time
-     * "field"   → paid in cash/UPI at the site
-     */
     serviceCategory: {
       type: String,
       enum: ["field", "digital"],
       default: "field",
     },
 
-    // ── Schedule (required for field, optional/auto for digital) ──
-    startTime: { type: Date, required: false },
-    endTime: { type: Date, required: false },
+    startTime: { type: Date },
+    endTime: { type: Date },
     estimatedDurationMinutes: { type: Number, default: 60 },
-
     preferredDate: { type: String, default: "" },
     preferredTime: { type: String, default: "" },
-
-    // ── Location (required for field, N/A for digital) ───────────
     address: { type: String, trim: true, default: "" },
 
-    // ── Status ────────────────────────────────────────────────────
+    // ── Status ─────────────────────────────────────────────────────
+    // pending_approval: field freelancer marked done, awaiting client confirm
     status: {
       type: String,
       enum: [
         "pending",
         "confirmed",
         "in_progress",
+        "pending_approval",
         "completed",
         "cancelled",
         "disputed",
@@ -77,64 +65,54 @@ const BookingSchema = new mongoose.Schema(
 
     disputeLocked: { type: Boolean, default: false },
 
-    // ── Pricing snapshot ────────────────────────────────────────
+    // ── Pricing ────────────────────────────────────────────────────
     pricingType: {
       type: String,
       enum: ["hourly", "fixed", "milestone"],
       default: "hourly",
     },
-
-    /** Total agreed price (₹). For hourly-field, estimated. */
     agreedAmount: { type: Number, default: 0 },
-
-    /** For milestone bookings — copied from freelancer profile */
     milestones: { type: [BookingMilestoneSchema], default: [] },
+    bookingMode: { type: String, default: "standard" },
 
-    // ── Payment / Escrow ─────────────────────────────────────────
-    /**
-     * DIGITAL FLOW:
-     *   unpaid → pending → held → released / refunded / partial_refund
-     *
-     * FIELD FLOW:
-     *   field_pending (no online payment; paid at site)
-     *   field_paid (marked after on-site payment)
-     */
+    // ── Payment / Escrow ───────────────────────────────────────────
     paymentStatus: {
       type: String,
       enum: [
-        "unpaid", // digital: client hasn't paid yet
-        "pending", // digital: Razorpay order created
-        "held", // digital: escrow active
-        "partially_released", // digital: some milestones released
-        "released", // digital: full amount released to freelancer
-        "refunded", // digital: full refund to client
-        "partial_refund", // digital: split after dispute
-        "field_pending", // field: awaiting on-site payment
-        "field_paid", // field: paid at location
+        "unpaid",
+        "pending",
+        "held",
+        "partially_released",
+        "released",
+        "refunded",
+        "partial_refund",
+        "field_pending",
+        "field_paid",
       ],
       default: "unpaid",
     },
-
-    /** Razorpay order ID created when client initiates payment */
     razorpayOrderId: { type: String, default: "" },
-
-    /** Razorpay payment ID after successful capture */
     razorpayPaymentId: { type: String, default: "" },
-
-    /** Total amount paid into escrow (₹, not paise) */
     escrowAmount: { type: Number, default: 0 },
-
     releasedAmount: { type: Number, default: 0 },
     refundedAmount: { type: Number, default: 0 },
     razorpayRefundId: { type: String, default: "" },
-
     paidAt: { type: Date },
     releasedAt: { type: Date },
     refundedAt: { type: Date },
 
-    /** Auto-release timer — if client doesn't act within N days after completion */
-    autoReleaseAt: { type: Date }, // for cron job
-    deadline: { type: Date }, // auto‑refund deadline for digital bookings
+    // ── Deadlines & auto-actions ───────────────────────────────────
+    /** Digital: if freelancer misses this → auto refund to client */
+    deadline: { type: Date },
+    /** Digital: if client doesn't release after freelancer done → auto release */
+    autoReleaseAt: { type: Date },
+
+    // ── Field arrival tracking ─────────────────────────────────────
+    arrivedAt: { type: Date },
+    arrivalLat: { type: Number },
+    arrivalLng: { type: Number },
+    /** True once freelancer taps "Mark Arrived" */
+    arrivalVerified: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
@@ -142,6 +120,8 @@ const BookingSchema = new mongoose.Schema(
 BookingSchema.index({ freelancerId: 1, startTime: 1, endTime: 1 });
 BookingSchema.index({ clientId: 1, status: 1 });
 BookingSchema.index({ razorpayOrderId: 1 });
-BookingSchema.index({ autoReleaseAt: 1 }); // for cron job
+BookingSchema.index({ autoReleaseAt: 1 });
+BookingSchema.index({ deadline: 1, paymentStatus: 1 });
+BookingSchema.index({ status: 1, serviceCategory: 1, updatedAt: 1 });
 
 export default mongoose.model("Booking", BookingSchema);

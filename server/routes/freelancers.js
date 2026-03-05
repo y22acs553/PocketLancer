@@ -1,3 +1,4 @@
+// server/routes/freelancers.js
 import express from "express";
 import mongoose from "mongoose";
 import Freelancer from "../models/Freelancer.js";
@@ -21,18 +22,6 @@ function isValidCoordinates(latitude, longitude) {
 
 /**
  * getSearchVariants — Fuzzy / stem-aware search patterns
- *
- * For a query like "plumber", we want to also match "plumbing", "plumb".
- * Strategy: strip common English suffixes to get the root, then search
- * both the original word and the root with a partial-prefix regex.
- *
- * Examples:
- *   plumber  → ["plumber", "plumb"]   → /plumb/i matches "plumbing","plumber"
- *   plumbing → ["plumbing", "plumb"]  → /plumb/i
- *   electrician → ["electric"]
- *   electrical  → ["electric"]
- *   developer  → ["develop"]
- *   designing  → ["design"]
  */
 function getSearchVariants(word) {
   const w = word.toLowerCase().trim();
@@ -40,32 +29,30 @@ function getSearchVariants(word) {
 
   const variants = new Set([w]);
 
-  // Strip common suffixes (order matters — longest first)
   const suffixes = [
-    "ician", // electrician → electric
-    "ation", // installation → install
-    "ting", // installing → install (after -ting → remove 'ting', keep stem)
-    "ling", // travelling
-    "ing", // plumbing → plumb, designing → design
-    "tion", // installation → installa
-    "sion", // extension
+    "ician",
+    "ation",
+    "ting",
+    "ling",
+    "ing",
+    "tion",
+    "sion",
     "ness",
     "ment",
     "ance",
     "ence",
     "ity",
     "ive",
-    "ical", // electrical → electr
     "ical",
     "al",
-    "er", // plumber → plumb, developer → develop
-    "or", // contractor → contract
+    "er",
+    "or",
     "eur",
-    "ist", // pianist → pian
-    "ian", // technician → technic
-    "ed", // skilled
+    "ist",
+    "ian",
+    "ed",
     "ly",
-    "ry", // carpentry → carpent
+    "ry",
     "ery",
   ];
 
@@ -78,31 +65,17 @@ function getSearchVariants(word) {
   return Array.from(variants);
 }
 
-/**
- * Build $or query for a set of skill search terms.
- * Each word gets expanded into stem variants, each variant becomes a
- * prefix-based regex so "plumb" matches "plumbing", "plumber" etc.
- */
 function buildSkillQuery(skillsText) {
   const keywords = skillsText
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-
   const orClauses = [];
 
   for (const keyword of keywords) {
-    const variants = getSearchVariants(keyword);
-
-    for (const variant of variants) {
-      // Use word-start match when variant is a short stem (avoid false hits)
-      const regexStr =
-        variant.length <= 4
-          ? `^${variant}` // short stems: anchor to start of word
-          : variant; // longer stems: anywhere in the field
-
+    for (const variant of getSearchVariants(keyword)) {
+      const regexStr = variant.length <= 4 ? `^${variant}` : variant;
       const regex = { $regex: regexStr, $options: "i" };
-
       orClauses.push(
         { skills: { $elemMatch: regex } },
         { title: regex },
@@ -168,18 +141,16 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       phone,
     } = req.body;
 
-    if (category && !["field", "digital"].includes(category)) {
+    if (category && !["field", "digital"].includes(category))
       return res.status(400).json({ msg: "Invalid category" });
-    }
 
     if (
       (category === "field" || !category) &&
       !isValidCoordinates(latitude, longitude)
-    ) {
-      return res.status(400).json({
-        msg: "Valid GPS location is required for field services",
-      });
-    }
+    )
+      return res
+        .status(400)
+        .json({ msg: "Valid GPS location is required for field services" });
 
     const updateData = {
       title,
@@ -200,9 +171,7 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       dateOfBirth: dateOfBirth || null,
     };
 
-    if (category === "digital") {
-      updateData.location = undefined;
-    }
+    if (category === "digital") updateData.location = undefined;
 
     if (category === "field" && isValidCoordinates(latitude, longitude)) {
       updateData.location = {
@@ -243,15 +212,12 @@ router.get("/search", protect, async (req, res) => {
 
     let freelancers = [];
 
-    // ==============================
-    // FIELD SERVICES SEARCH
-    // ==============================
+    // ── FIELD SEARCH ──────────────────────────────────────────────
     if (category === "field") {
-      if (!isValidCoordinates(latitude, longitude)) {
-        return res.status(400).json({
-          msg: "Valid latitude and longitude required",
-        });
-      }
+      if (!isValidCoordinates(latitude, longitude))
+        return res
+          .status(400)
+          .json({ msg: "Valid latitude and longitude required" });
 
       const geoQuery = {
         category: "field",
@@ -299,26 +265,23 @@ router.get("/search", protect, async (req, res) => {
             location: 1,
             category: 1,
             pricingType: 1,
-            distanceKm: {
-              $round: [{ $divide: ["$distanceMeters", 1000] }, 2],
-            },
+            distanceKm: { $round: [{ $divide: ["$distanceMeters", 1000] }, 2] },
+            // ✅ honorScore now included from the joined users collection
             user: {
               _id: "$user._id",
               name: "$user.name",
               email: "$user.email",
+              honorScore: "$user.honorScore",
             },
           },
         },
       ]);
     }
 
-    // ==============================
-    // DIGITAL SERVICES SEARCH
-    // ==============================
+    // ── DIGITAL SEARCH ────────────────────────────────────────────
     else {
       const textQuery = {
         category: "digital",
-        // Require bank details for digital workers to appear in search
         "bankDetails.accountNumber": { $exists: true, $ne: "" },
         "bankDetails.ifscCode": { $exists: true, $ne: "" },
       };
@@ -330,7 +293,8 @@ router.get("/search", protect, async (req, res) => {
 
       freelancers = await Freelancer.find(textQuery)
         .limit(50)
-        .populate("user", "name email")
+        // ✅ honorScore now included in populate
+        .populate("user", "name email honorScore")
         .select(
           "title bio skills hourlyRate fixedPrice advanceAmount pricingType city country profilePic category",
         );
@@ -349,39 +313,38 @@ router.get("/search", protect, async (req, res) => {
 });
 
 /* =====================================================
-   PUBLIC FREELANCER PROFILE
+   PUBLIC FREELANCER PROFILE  /:id
    ===================================================== */
 
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(404).json({ msg: "Freelancer not found" });
-    }
 
-    const profile = await Freelancer.findById(id).populate("user", "name honorScore");
+    const profile = await Freelancer.findById(id).populate(
+      "user",
+      "name honorScore avatar",
+    );
 
-    if (!profile) {
-      return res.status(404).json({ msg: "Freelancer not found" });
-    }
+    if (!profile) return res.status(404).json({ msg: "Freelancer not found" });
 
     if (profile.category === "field") {
       const [lng, lat] = profile.location?.coordinates || [];
-      if (!isValidCoordinates(lat, lng)) {
-        return res.status(403).json({
-          msg: "Freelancer profile is not active yet",
-        });
-      }
+      if (!isValidCoordinates(lat, lng))
+        return res
+          .status(403)
+          .json({ msg: "Freelancer profile is not active yet" });
     }
 
     res.json({
       success: true,
       profile: {
         _id: profile._id,
-        userId: profile.user?._id, // ← User._id for chat (different from Freelancer._id)
+        userId: profile.user?._id,
         name: profile.user?.name,
-        honorScore: profile.user?.honorScore,
+        honorScore: profile.user?.honorScore ?? 100,
         category: profile.category,
         title: profile.title,
         bio: profile.bio,

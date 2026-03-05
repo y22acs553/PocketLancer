@@ -1,3 +1,4 @@
+// client/app/bookings/[id]/page.tsx
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -5,12 +6,12 @@ import { useParams, useRouter } from "next/navigation";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
 import DisputeModal from "@/components/DisputeModal";
+import { getCurrentLocation } from "@/utils/geolocation";
 import {
   ArrowLeft,
   Calendar,
   Clock,
   MapPin,
-  Briefcase,
   CheckCircle2,
   XCircle,
   Loader2,
@@ -20,11 +21,13 @@ import {
   Star,
   AlertTriangle,
   IndianRupee,
-  Timer,
-  User,
-  ChevronRight,
+  Navigation,
+  ThumbsUp,
+  Hourglass,
+  Shield,
 } from "lucide-react";
 
+// ── Types ──────────────────────────────────────────────────────────
 type MilestoneStatus =
   | "pending"
   | "in_progress"
@@ -39,7 +42,6 @@ interface Milestone {
   amount: number;
   order: number;
   status: MilestoneStatus;
-  releasedAt?: string;
 }
 
 interface Booking {
@@ -49,7 +51,15 @@ interface Booking {
   preferredDate: string;
   preferredTime: string;
   address: string;
-  status: "pending" | "confirmed" | "completed" | "cancelled" | "disputed";
+  serviceCategory: "field" | "digital";
+  status:
+    | "pending"
+    | "confirmed"
+    | "in_progress"
+    | "pending_approval"
+    | "completed"
+    | "cancelled"
+    | "disputed";
   estimatedDurationMinutes: number;
   pricingType: "hourly" | "fixed" | "milestone";
   agreedAmount: number;
@@ -60,17 +70,16 @@ interface Booking {
   paidAt?: string;
   disputeLocked: boolean;
   milestones: Milestone[];
-  clientId: { _id: string; name: string; email: string; avatar?: string };
-  freelancerId: {
-    _id: string;
-    title: string;
-    user: string;
-    profilePic?: string;
-    name?: string;
-  };
+  arrivedAt?: string;
+  arrivalVerified?: boolean;
+  deadline?: string;
+  autoReleaseAt?: string;
+  clientId: { _id: string; name: string; email: string; honorScore?: number };
+  freelancerId: { _id: string; title: string; user: string; name?: string };
   createdAt: string;
 }
 
+// ── Style maps ─────────────────────────────────────────────────────
 const STATUS_STYLES: Record<
   string,
   { bg: string; text: string; label: string }
@@ -85,6 +94,16 @@ const STATUS_STYLES: Record<
     text: "text-indigo-700 dark:text-indigo-300",
     label: "Confirmed",
   },
+  in_progress: {
+    bg: "bg-sky-100 dark:bg-sky-950/40",
+    text: "text-sky-700 dark:text-sky-300",
+    label: "In Progress",
+  },
+  pending_approval: {
+    bg: "bg-amber-100 dark:bg-amber-950/40",
+    text: "text-amber-700 dark:text-amber-300",
+    label: "Awaiting Your Approval",
+  },
   completed: {
     bg: "bg-emerald-100 dark:bg-emerald-950/40",
     text: "text-emerald-700 dark:text-emerald-300",
@@ -96,8 +115,8 @@ const STATUS_STYLES: Record<
     label: "Cancelled",
   },
   disputed: {
-    bg: "bg-amber-100 dark:bg-amber-950/40",
-    text: "text-amber-700 dark:text-amber-300",
+    bg: "bg-orange-100 dark:bg-orange-950/40",
+    text: "text-orange-700 dark:text-orange-300",
     label: "Disputed",
   },
 };
@@ -110,17 +129,53 @@ const PAYMENT_LABEL: Record<string, string> = {
   released: "Released",
   refunded: "Refunded",
   partial_refund: "Partial refund",
+  field_pending: "Pay at location",
+  field_paid: "Paid at location",
 };
 
 const MILESTONE_STYLES: Record<MilestoneStatus, { bg: string; text: string }> =
   {
-    pending: { bg: "bg-slate-100", text: "text-slate-500" },
-    in_progress: { bg: "bg-blue-100", text: "text-blue-600" },
-    submitted: { bg: "bg-amber-100", text: "text-amber-700" },
-    approved: { bg: "bg-emerald-100", text: "text-emerald-700" },
-    released: { bg: "bg-emerald-200", text: "text-emerald-800" },
+    pending: {
+      bg: "bg-slate-100 dark:bg-slate-800",
+      text: "text-slate-500 dark:text-slate-400",
+    },
+    in_progress: {
+      bg: "bg-blue-100 dark:bg-blue-900/40",
+      text: "text-blue-600 dark:text-blue-300",
+    },
+    submitted: {
+      bg: "bg-amber-100 dark:bg-amber-900/40",
+      text: "text-amber-700 dark:text-amber-300",
+    },
+    approved: {
+      bg: "bg-emerald-100 dark:bg-emerald-900/40",
+      text: "text-emerald-700 dark:text-emerald-300",
+    },
+    released: {
+      bg: "bg-emerald-200 dark:bg-emerald-900/60",
+      text: "text-emerald-800 dark:text-emerald-200",
+    },
   };
 
+function HonorBadge({ score }: { score?: number }) {
+  if (score === undefined) return null;
+  const cls =
+    score < 35
+      ? "bg-red-50 text-red-700 ring-red-100 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20"
+      : score < 75
+        ? "bg-orange-50 text-orange-700 ring-orange-100 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20"
+        : "bg-green-50 text-green-700 ring-green-100 dark:bg-green-500/10 dark:text-green-300 dark:ring-green-500/20";
+  const label = score < 35 ? "Low Trust" : score < 75 ? "Average" : "Trusted";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-black ring-1 ${cls}`}
+    >
+      <Shield size={10} /> {label} · {score}
+    </span>
+  );
+}
+
+// ── Page ───────────────────────────────────────────────────────────
 export default function BookingDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -130,13 +185,14 @@ export default function BookingDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionLoading, setActionLoading] = useState("");
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ msg: string; ok?: boolean } | null>(
+    null,
+  );
   const [showDispute, setShowDispute] = useState(false);
-  const [showPayment, setShowPayment] = useState(false);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 3000);
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3500);
   };
 
   const fetchBooking = useCallback(async () => {
@@ -154,21 +210,97 @@ export default function BookingDetailPage() {
   useEffect(() => {
     fetchBooking();
   }, [fetchBooking]);
-  useEffect(() => {
-    if (toast) {
-      const t = setTimeout(() => setToast(""), 3000);
-      return () => clearTimeout(t);
-    }
-  }, [toast]);
 
+  // ── Actions ──────────────────────────────────────────────────────
   const updateStatus = async (status: string) => {
     try {
       setActionLoading(status);
       await api.patch(`/bookings/${id}/status`, { status });
-      setBooking((b) => (b ? { ...b, status: status as any } : b));
-      showToast(`Booking ${status}`);
+      await fetchBooking();
+      showToast(
+        `Booking ${status === "confirmed" ? "accepted" : status === "cancelled" ? "rejected" : "updated"}`,
+      );
     } catch (err: any) {
-      showToast(err.response?.data?.msg || "Failed");
+      showToast(err.response?.data?.msg || "Failed", false);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const markArrived = async () => {
+    try {
+      setActionLoading("arrive");
+      const coords = await getCurrentLocation();
+      await api.patch(`/bookings/${id}/arrive`, {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
+      await fetchBooking();
+      showToast("Arrival marked! Client has been notified.");
+    } catch (err: any) {
+      showToast(
+        err.response?.data?.msg || err.message || "Failed to get location",
+        false,
+      );
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const confirmField = async () => {
+    try {
+      setActionLoading("confirm_field");
+      await api.patch(`/bookings/${id}/confirm-field`);
+      await fetchBooking();
+      showToast("Work confirmed! Honor Score +2");
+    } catch (err: any) {
+      showToast(err.response?.data?.msg || "Failed", false);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const releasePayment = async () => {
+    try {
+      setActionLoading("release");
+      await api.post(`/bookings/${id}/payment/release`);
+      await fetchBooking();
+      showToast("Payment released! Honor Score +2");
+    } catch (err: any) {
+      showToast(err.response?.data?.msg || "Failed", false);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const initiatePayment = async () => {
+    try {
+      setActionLoading("pay");
+      const res = await api.post(`/bookings/${id}/payment/create-order`);
+      const { razorpayOrderId, amount, currency, keyId } = res.data;
+
+      const rzp = new (window as any).Razorpay({
+        key: keyId,
+        amount,
+        currency,
+        order_id: razorpayOrderId,
+        name: "PocketLancer",
+        description: booking?.serviceType,
+        handler: async (response: any) => {
+          await api.post(`/bookings/${id}/payment/verify`, {
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature,
+          });
+          await fetchBooking();
+          showToast("Payment successful! Funds held in escrow.");
+        },
+        prefill: { name: user?.name, email: user?.email },
+        theme: { color: "#0f172a" },
+      });
+      rzp.open();
+    } catch (err: any) {
+      showToast(err.response?.data?.msg || "Payment failed", false);
     } finally {
       setActionLoading("");
     }
@@ -181,7 +313,7 @@ export default function BookingDetailPage() {
       await fetchBooking();
       showToast("Milestone updated");
     } catch {
-      showToast("Failed to update milestone");
+      showToast("Failed", false);
     } finally {
       setActionLoading("");
     }
@@ -194,67 +326,30 @@ export default function BookingDetailPage() {
       await fetchBooking();
       showToast("Milestone approved!");
     } catch {
-      showToast("Failed to approve milestone");
+      showToast("Failed", false);
     } finally {
       setActionLoading("");
     }
   };
 
-  const initiatePayment = async () => {
-    try {
-      setActionLoading("pay");
-      const res = await api.post("/payments/order", { bookingId: id });
-      const { order, key } = res.data;
-
-      const rzp = new (window as any).Razorpay({
-        key,
-        amount: order.amount,
-        currency: order.currency,
-        order_id: order.id,
-        name: "PocketLancer",
-        description: booking?.serviceType,
-        handler: async (response: any) => {
-          await api.post("/payments/verify", {
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-            bookingId: id,
-          });
-          await fetchBooking();
-          showToast("Payment successful! Funds held in escrow.");
-        },
-        prefill: {
-          name: user?.name,
-          email: user?.email,
-          contact: user?.phone,
-        },
-        theme: { color: "#0f172a" },
-      });
-      rzp.open();
-    } catch (err: any) {
-      showToast(err.response?.data?.msg || "Payment initiation failed");
-    } finally {
-      setActionLoading("");
-    }
-  };
-
+  // ── Render states ────────────────────────────────────────────────
   if (loading)
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-[60vh] items-center justify-center">
         <Loader2 size={36} className="animate-spin text-slate-400" />
       </div>
     );
 
   if (error || !booking)
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
         <AlertTriangle size={48} className="text-red-400" />
-        <p className="font-bold text-slate-600">
+        <p className="font-bold text-slate-600 dark:text-slate-300">
           {error || "Booking not found"}
         </p>
         <button
           onClick={() => router.back()}
-          className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white"
+          className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white dark:bg-white dark:text-slate-900"
         >
           Go back
         </button>
@@ -263,104 +358,158 @@ export default function BookingDetailPage() {
 
   const isClient = user?._id === booking.clientId._id;
   const isFreelancer = !isClient;
+  const isField = booking.serviceCategory === "field";
   const statusStyle = STATUS_STYLES[booking.status] || STATUS_STYLES.pending;
 
+  const deadlineDate = booking.deadline ? new Date(booking.deadline) : null;
+  const autoReleaseDate = booking.autoReleaseAt
+    ? new Date(booking.autoReleaseAt)
+    : null;
+
+  // Field freelancer can mark arrived if confirmed or in_progress and not yet arrived
+  const canMarkArrived =
+    isFreelancer &&
+    isField &&
+    ["confirmed", "in_progress"].includes(booking.status) &&
+    !booking.arrivalVerified;
+  // Field freelancer can mark complete if arrived
+  const canMarkComplete =
+    isFreelancer &&
+    isField &&
+    booking.status === "in_progress" &&
+    booking.arrivalVerified;
+  // Client sees confirm/dispute when field booking is pending_approval
+  const showFieldApproval = isClient && booking.status === "pending_approval";
+  // Client can release escrow for digital in_progress
+  const canRelease =
+    isClient &&
+    booking.serviceCategory === "digital" &&
+    booking.status === "in_progress" &&
+    booking.paymentStatus === "held";
+
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20">
+    <div className="min-h-screen bg-slate-50 pb-24 dark:bg-slate-950">
       {/* Toast */}
       {toast && (
-        <div className="fixed top-6 right-6 z-50 rounded-2xl bg-slate-900 px-5 py-3 text-white font-bold shadow-xl dark:bg-white dark:text-slate-900">
-          {toast}
+        <div
+          className={`fixed top-4 left-1/2 z-50 -translate-x-1/2 rounded-2xl px-5 py-3 text-sm font-bold shadow-xl ${toast.ok !== false ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-red-600 text-white"}`}
+        >
+          {toast.msg}
         </div>
       )}
 
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+      <div className="mx-auto max-w-3xl space-y-4 px-4 py-6">
         {/* Back */}
         <button
           onClick={() => router.back()}
-          className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-900 dark:hover:text-white transition"
+          className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 active:text-slate-900 dark:active:text-white"
         >
-          <ArrowLeft size={16} /> Back to bookings
+          <ArrowLeft size={16} /> Back
         </button>
 
-        {/* Header card */}
-        <div className="rounded-3xl bg-white dark:bg-slate-900 ring-1 ring-black/5 dark:ring-white/10 shadow-sm p-6 lg:p-8">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="space-y-2">
-              <div className="flex items-center gap-3 flex-wrap">
-                <h1 className="text-2xl font-black text-slate-900 dark:text-white">
+        {/* Header */}
+        <div className="rounded-3xl bg-white p-6 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl font-black text-slate-900 dark:text-white">
                   {booking.serviceType}
                 </h1>
                 <span
-                  className={`rounded-full px-3 py-1 text-xs font-black uppercase tracking-widest ${statusStyle.bg} ${statusStyle.text}`}
+                  className={`rounded-full px-3 py-1 text-xs font-black uppercase tracking-wider ${statusStyle.bg} ${statusStyle.text}`}
                 >
                   {statusStyle.label}
                 </span>
               </div>
-              <p className="text-xs font-mono text-slate-400">
-                ID: {booking._id}
+              <p className="mt-1 text-xs font-bold text-slate-400">
+                ID: {booking._id.slice(-8)} ·{" "}
+                {new Date(booking.createdAt).toLocaleDateString("en-IN", {
+                  dateStyle: "medium",
+                })}
               </p>
             </div>
-
-            {/* Amount */}
-            <div className="rounded-2xl bg-slate-50 dark:bg-slate-800 px-5 py-4 text-right">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Agreed amount
-              </p>
-              <p className="text-3xl font-black text-slate-900 dark:text-white flex items-center justify-end gap-1 mt-1">
-                <IndianRupee size={20} />
-                {booking.agreedAmount.toLocaleString("en-IN")}
-              </p>
-              <p className="text-xs font-bold text-slate-400 mt-1 capitalize">
-                {booking.pricingType} pricing
-              </p>
-            </div>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-black ${isField ? "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300" : "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"}`}
+            >
+              {isField ? "Field" : "Digital"}
+            </span>
           </div>
 
-          {/* Meta grid */}
-          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
+          {/* Arrival verified banner (field) */}
+          {isField && booking.arrivalVerified && (
+            <div className="mt-4 flex items-center gap-2 rounded-2xl bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+              <Navigation size={15} />
+              Freelancer arrived at{" "}
+              {booking.arrivedAt
+                ? new Date(booking.arrivedAt).toLocaleTimeString("en-IN", {
+                    timeStyle: "short",
+                  })
+                : "—"}
+            </div>
+          )}
+
+          {/* Deadline warning */}
+          {deadlineDate &&
+            booking.paymentStatus === "held" &&
+            booking.status !== "in_progress" && (
+              <div className="mt-4 flex items-center gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                <Hourglass size={15} />
+                Delivery deadline:{" "}
+                {deadlineDate.toLocaleDateString("en-IN", {
+                  dateStyle: "medium",
+                })}
+              </div>
+            )}
+        </div>
+
+        {/* Details */}
+        <div className="rounded-3xl bg-white p-6 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
+          <h2 className="mb-4 font-black text-slate-900 dark:text-white">
+            Details
+          </h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {[
               {
-                icon: <Calendar size={15} />,
-                label: "Date",
-                value: new Date(booking.preferredDate).toLocaleDateString(
-                  undefined,
-                  { dateStyle: "medium" },
-                ),
+                icon: <IndianRupee size={14} />,
+                label: "Amount",
+                value: `₹${booking.agreedAmount.toLocaleString("en-IN")}`,
               },
+              ...(isField
+                ? [
+                    {
+                      icon: <Calendar size={14} />,
+                      label: "Date",
+                      value: booking.preferredDate || "—",
+                    },
+                    {
+                      icon: <Clock size={14} />,
+                      label: "Time",
+                      value: booking.preferredTime || "—",
+                    },
+                  ]
+                : []),
               {
-                icon: <Clock size={15} />,
-                label: "Time",
-                value: booking.preferredTime,
-              },
-              {
-                icon: <Timer size={15} />,
-                label: "Duration",
-                value: `${booking.estimatedDurationMinutes} min`,
-              },
-              {
-                icon: <MapPin size={15} />,
+                icon: <MapPin size={14} />,
                 label: "Address",
                 value: booking.address,
               },
             ].map((item) => (
               <div
                 key={item.label}
-                className="rounded-2xl bg-slate-50 dark:bg-slate-800 p-4"
+                className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800"
               >
-                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 mb-1.5">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-slate-400">
                   {item.icon} {item.label}
                 </div>
-                <p className="text-sm font-bold text-slate-800 dark:text-white break-words">
+                <p className="break-words text-sm font-bold text-slate-800 dark:text-white">
                   {item.value}
                 </p>
               </div>
             ))}
           </div>
-
           {booking.issueDescription && (
-            <div className="mt-4 rounded-2xl bg-slate-50 dark:bg-slate-800 p-4">
-              <p className="text-xs font-bold text-slate-400 mb-1">Notes</p>
+            <div className="mt-3 rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+              <p className="mb-1 text-xs font-bold text-slate-400">Notes</p>
               <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
                 {booking.issueDescription}
               </p>
@@ -369,9 +518,13 @@ export default function BookingDetailPage() {
         </div>
 
         {/* Parties */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {[
-            { label: "Client", person: booking.clientId },
+            {
+              label: "Client",
+              person: booking.clientId,
+              score: booking.clientId.honorScore,
+            },
             {
               label: "Freelancer",
               person: {
@@ -383,35 +536,33 @@ export default function BookingDetailPage() {
           ].map((p) => (
             <div
               key={p.label}
-              className="rounded-3xl bg-white dark:bg-slate-900 ring-1 ring-black/5 dark:ring-white/10 p-5 flex items-center gap-4"
+              className="flex items-center gap-4 rounded-3xl bg-white p-5 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10"
             >
-              <div className="h-12 w-12 rounded-2xl bg-slate-900 dark:bg-white flex items-center justify-center text-white dark:text-slate-900 font-black text-lg flex-shrink-0">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-900 font-black text-lg text-white dark:bg-white dark:text-slate-900">
                 {(p.person.name?.[0] || "?").toUpperCase()}
               </div>
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
                   {p.label}
                 </p>
                 <p className="font-black text-slate-900 dark:text-white">
                   {p.person.name}
                 </p>
-                {p.person.email && (
-                  <p className="text-xs text-slate-500">{p.person.email}</p>
-                )}
+                {p.score !== undefined && <HonorBadge score={p.score} />}
               </div>
             </div>
           ))}
         </div>
 
-        {/* Payment status */}
-        <div className="rounded-3xl bg-white dark:bg-slate-900 ring-1 ring-black/5 dark:ring-white/10 shadow-sm p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <CreditCard size={20} className="text-slate-500" />
+        {/* Payment */}
+        <div className="rounded-3xl bg-white p-6 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
+          <div className="mb-4 flex items-center gap-3">
+            <CreditCard size={18} className="text-slate-500" />
             <h2 className="font-black text-slate-900 dark:text-white">
-              Payment & Escrow
+              Payment
             </h2>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
               {
                 label: "Status",
@@ -433,9 +584,9 @@ export default function BookingDetailPage() {
             ].map((s) => (
               <div
                 key={s.label}
-                className="rounded-2xl bg-slate-50 dark:bg-slate-800 p-4"
+                className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800"
               >
-                <p className="text-xs font-bold text-slate-400 mb-1">
+                <p className="mb-1 text-xs font-bold text-slate-400">
                   {s.label}
                 </p>
                 <p className="text-sm font-black text-slate-900 dark:text-white">
@@ -445,14 +596,26 @@ export default function BookingDetailPage() {
             ))}
           </div>
 
-          {/* Pay button for client */}
+          {autoReleaseDate &&
+            booking.status === "in_progress" &&
+            booking.paymentStatus === "held" && (
+              <p className="mt-3 text-xs font-bold text-slate-400">
+                Payment auto-releases on{" "}
+                {autoReleaseDate.toLocaleDateString("en-IN", {
+                  dateStyle: "medium",
+                })}{" "}
+                if no action taken.
+              </p>
+            )}
+
+          {/* Pay button */}
           {isClient &&
             booking.status === "confirmed" &&
             booking.paymentStatus === "unpaid" && (
               <button
                 onClick={initiatePayment}
                 disabled={actionLoading === "pay"}
-                className="mt-5 w-full rounded-2xl bg-emerald-600 py-3.5 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 py-4 text-sm font-black text-white active:bg-emerald-700 disabled:opacity-50"
               >
                 {actionLoading === "pay" ? (
                   <Loader2 size={18} className="animate-spin" />
@@ -468,22 +631,22 @@ export default function BookingDetailPage() {
         {/* Milestones */}
         {booking.pricingType === "milestone" &&
           booking.milestones.length > 0 && (
-            <div className="rounded-3xl bg-white dark:bg-slate-900 ring-1 ring-black/5 dark:ring-white/10 shadow-sm p-6">
-              <h2 className="font-black text-slate-900 dark:text-white mb-4">
+            <div className="rounded-3xl bg-white p-6 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
+              <h2 className="mb-4 font-black text-slate-900 dark:text-white">
                 Milestones
               </h2>
               <div className="space-y-3">
-                {booking.milestones
+                {[...booking.milestones]
                   .sort((a, b) => a.order - b.order)
                   .map((m) => {
                     const ms = MILESTONE_STYLES[m.status];
                     return (
                       <div
                         key={m._id}
-                        className="rounded-2xl border border-slate-100 dark:border-slate-800 p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+                        className="flex flex-col gap-3 rounded-2xl border border-slate-100 p-4 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between"
                       >
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
+                          <div className="mb-1 flex items-center gap-2">
                             <span
                               className={`rounded-full px-2.5 py-0.5 text-xs font-black ${ms.bg} ${ms.text}`}
                             >
@@ -509,7 +672,7 @@ export default function BookingDetailPage() {
                                 updateMilestone(m._id, "in_progress")
                               }
                               disabled={!!actionLoading}
-                              className="rounded-xl bg-blue-600 text-white text-xs font-black px-3 py-1.5 hover:bg-blue-700 disabled:opacity-50"
+                              className="rounded-xl bg-blue-600 px-3 py-1.5 text-xs font-black text-white active:bg-blue-700 disabled:opacity-50"
                             >
                               Start
                             </button>
@@ -520,7 +683,7 @@ export default function BookingDetailPage() {
                                 updateMilestone(m._id, "submitted")
                               }
                               disabled={!!actionLoading}
-                              className="rounded-xl bg-amber-600 text-white text-xs font-black px-3 py-1.5 hover:bg-amber-700 disabled:opacity-50"
+                              className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-black text-white active:bg-amber-700 disabled:opacity-50"
                             >
                               Submit
                             </button>
@@ -529,7 +692,7 @@ export default function BookingDetailPage() {
                             <button
                               onClick={() => approveMilestone(m._id)}
                               disabled={!!actionLoading}
-                              className="rounded-xl bg-emerald-600 text-white text-xs font-black px-3 py-1.5 hover:bg-emerald-700 disabled:opacity-50"
+                              className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-black text-white active:bg-emerald-700 disabled:opacity-50"
                             >
                               {actionLoading === m._id + "approve" ? (
                                 <Loader2 size={14} className="animate-spin" />
@@ -547,17 +710,18 @@ export default function BookingDetailPage() {
           )}
 
         {/* Actions */}
-        <div className="rounded-3xl bg-white dark:bg-slate-900 ring-1 ring-black/5 dark:ring-white/10 shadow-sm p-6">
-          <h2 className="font-black text-slate-900 dark:text-white mb-4">
+        <div className="rounded-3xl bg-white p-6 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
+          <h2 className="mb-4 font-black text-slate-900 dark:text-white">
             Actions
           </h2>
           <div className="flex flex-wrap gap-3">
+            {/* Freelancer: Accept/Reject pending booking */}
             {isFreelancer && booking.status === "pending" && (
               <>
                 <button
                   onClick={() => updateStatus("confirmed")}
                   disabled={!!actionLoading}
-                  className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-5 py-3 hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+                  className="flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-black text-white active:bg-emerald-700 disabled:opacity-50"
                 >
                   {actionLoading === "confirmed" ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -569,7 +733,7 @@ export default function BookingDetailPage() {
                 <button
                   onClick={() => updateStatus("cancelled")}
                   disabled={!!actionLoading}
-                  className="rounded-2xl bg-red-600 text-white text-sm font-black px-5 py-3 hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+                  className="flex items-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white active:bg-red-700 disabled:opacity-50"
                 >
                   {actionLoading === "cancelled" ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -580,42 +744,123 @@ export default function BookingDetailPage() {
                 </button>
               </>
             )}
+
+            {/* Field freelancer: Mark arrived (GPS) */}
+            {canMarkArrived && (
+              <button
+                onClick={markArrived}
+                disabled={actionLoading === "arrive"}
+                className="flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white active:bg-blue-700 disabled:opacity-50"
+              >
+                {actionLoading === "arrive" ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <Navigation size={16} />
+                )}{" "}
+                Mark Arrived
+              </button>
+            )}
+
+            {/* Field freelancer: Mark complete (requires arrival) */}
+            {canMarkComplete && booking.pricingType !== "milestone" && (
+              <button
+                onClick={() => updateStatus("completed")}
+                disabled={!!actionLoading}
+                className="flex items-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-black text-white active:bg-indigo-700 disabled:opacity-50"
+              >
+                {actionLoading === "completed" ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <BadgeCheck size={16} />
+                )}{" "}
+                Mark Completed
+              </button>
+            )}
+
+            {/* Digital freelancer: Mark delivered */}
             {isFreelancer &&
-              booking.status === "confirmed" &&
+              !isField &&
+              ["confirmed", "in_progress"].includes(booking.status) &&
               booking.pricingType !== "milestone" && (
                 <button
                   onClick={() => updateStatus("completed")}
                   disabled={!!actionLoading}
-                  className="rounded-2xl bg-blue-600 text-white text-sm font-black px-5 py-3 hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                  className="flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white active:bg-blue-700 disabled:opacity-50"
                 >
                   {actionLoading === "completed" ? (
                     <Loader2 size={16} className="animate-spin" />
                   ) : (
                     <BadgeCheck size={16} />
                   )}{" "}
-                  Mark Completed
+                  Mark Delivered
                 </button>
               )}
-            {isClient && booking.status === "completed" && (
+
+            {/* Client: Confirm field work (pending_approval) */}
+            {showFieldApproval && (
+              <>
+                <button
+                  onClick={confirmField}
+                  disabled={!!actionLoading}
+                  className="flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-black text-white active:bg-emerald-700 disabled:opacity-50"
+                >
+                  {actionLoading === "confirm_field" ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <ThumbsUp size={16} />
+                  )}{" "}
+                  Confirm Work Done
+                </button>
+                <button
+                  onClick={() => setShowDispute(true)}
+                  className="flex items-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white active:bg-red-700"
+                >
+                  <ShieldAlert size={16} /> Raise Dispute
+                </button>
+              </>
+            )}
+
+            {/* Client: Release escrow (digital in_progress) */}
+            {canRelease && (
               <button
-                onClick={() => {}}
-                className="rounded-2xl bg-amber-500 text-white text-sm font-black px-5 py-3 hover:bg-amber-600 flex items-center gap-2"
+                onClick={releasePayment}
+                disabled={actionLoading === "release"}
+                className="flex items-center gap-2 rounded-2xl bg-violet-600 px-5 py-3 text-sm font-black text-white active:bg-violet-700 disabled:opacity-50"
               >
+                {actionLoading === "release" ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <CheckCircle2 size={16} />
+                )}{" "}
+                Release Payment
+              </button>
+            )}
+
+            {/* Client: Leave review on completed */}
+            {isClient && booking.status === "completed" && (
+              <button className="flex items-center gap-2 rounded-2xl bg-amber-500 px-5 py-3 text-sm font-black text-white active:bg-amber-600">
                 <Star size={16} fill="currentColor" /> Leave Review
               </button>
             )}
-            {(isClient || isFreelancer) &&
-              ["confirmed", "completed"].includes(booking.status) &&
+
+            {/* Dispute button (not already disputed, not pending_approval which has its own) */}
+            {!showFieldApproval &&
+              (isClient || isFreelancer) &&
+              ["confirmed", "in_progress", "completed"].includes(
+                booking.status,
+              ) &&
               !booking.disputeLocked && (
                 <button
                   onClick={() => setShowDispute(true)}
-                  className="rounded-2xl bg-red-600 text-white text-sm font-black px-5 py-3 hover:bg-red-700 flex items-center gap-2"
+                  className="flex items-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white active:bg-red-700"
                 >
                   <ShieldAlert size={16} /> Raise Dispute
                 </button>
               )}
+
+            {/* Dispute locked notice */}
             {booking.disputeLocked && (
-              <div className="inline-flex items-center gap-2 rounded-2xl bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 px-5 py-3 text-sm font-bold ring-1 ring-amber-200 dark:ring-amber-700">
+              <div className="flex items-center gap-2 rounded-2xl bg-amber-50 px-5 py-3 text-sm font-bold text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-700">
                 <ShieldAlert size={16} /> Dispute in progress — booking locked
               </div>
             )}

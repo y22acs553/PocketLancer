@@ -1,3 +1,4 @@
+// server/routes/bookings.js
 import express from "express";
 import Razorpay from "razorpay";
 import crypto from "crypto";
@@ -6,6 +7,7 @@ import Freelancer from "../models/Freelancer.js";
 import User from "../models/User.js";
 import { protect, authorize } from "../middleware/auth.js";
 import { SERVICE_DURATIONS } from "../constants/serviceDurations.js";
+import { deductScore, rewardScore } from "../services/honorScoreService.js";
 import {
   sendBookingCreated,
   sendBookingConfirmed,
@@ -16,80 +18,59 @@ import { notify } from "../utils/notify.js";
 
 const router = express.Router();
 
-// ─────────────────────────────────────────────────────────
-// Razorpay client
-// ─────────────────────────────────────────────────────────
+// Singleton Razorpay client
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ─────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────
 function getServiceDuration(serviceType) {
   if (!serviceType) return 60;
-  const key = serviceType.trim().toLowerCase();
-  return SERVICE_DURATIONS?.[key] ?? 60;
+  return SERVICE_DURATIONS?.[serviceType.trim().toLowerCase()] ?? 60;
 }
 
-function computeAgreedAmount(
-  freelancer,
-  estimatedDurationMinutes,
-  overrideHours,
-) {
-  // If caller passes explicit hours (hours-known flow), use those
-  if (overrideHours && overrideHours > 0) {
+function computeAgreedAmount(freelancer, durationMinutes, overrideHours) {
+  if (overrideHours > 0)
     return parseFloat(
       (overrideHours * (freelancer.hourlyRate || 0)).toFixed(2),
     );
-  }
 
   switch (freelancer.pricingType) {
     case "fixed":
       return freelancer.fixedPrice || 0;
     case "milestone":
-      return (freelancer.milestones || []).reduce(
-        (sum, m) => sum + m.amount,
-        0,
-      );
-    case "hourly":
-    default:
+      return (freelancer.milestones || []).reduce((s, m) => s + m.amount, 0);
+    default: // hourly
       return parseFloat(
-        (
-          (estimatedDurationMinutes / 60) *
-          (freelancer.hourlyRate || 0)
-        ).toFixed(2),
+        ((durationMinutes / 60) * (freelancer.hourlyRate || 0)).toFixed(2),
       );
   }
 }
 
 function verifyRazorpaySignature(orderId, paymentId, signature) {
-  const body = `${orderId}|${paymentId}`;
   const expected = crypto
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-    .update(body)
+    .update(`${orderId}|${paymentId}`)
     .digest("hex");
   return expected === signature;
 }
 
-// ─────────────────────────────────────────────────────────
-// GET /api/bookings/mybookings
-// ─────────────────────────────────────────────────────────
+// ── GET /api/bookings/mybookings ──────────────────────────────────
 router.get("/mybookings", protect, async (req, res) => {
   try {
     const query = {};
     if (req.user.role === "client") {
       query.clientId = req.user._id;
     } else if (req.user.role === "freelancer") {
-      const freelancer = await Freelancer.findOne({ user: req.user._id });
-      if (!freelancer) return res.json({ success: true, data: [] });
-      query.freelancerId = freelancer._id;
+      const fl = await Freelancer.findOne({ user: req.user._id }).lean();
+      if (!fl) return res.json({ success: true, data: [] });
+      query.freelancerId = fl._id;
     }
 
     const bookings = await Booking.find(query)
       .sort({ createdAt: -1 })
-      .populate("clientId", "name email avatar")
+      .populate("clientId", "name email avatar honorScore")
       .populate(
         "freelancerId",
         "title hourlyRate fixedPrice pricingType user profilePic category",
@@ -102,13 +83,11 @@ router.get("/mybookings", protect, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────
-// GET /api/bookings/:id
-// ─────────────────────────────────────────────────────────
+// ── GET /api/bookings/:id ─────────────────────────────────────────
 router.get("/:id", protect, async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id)
-      .populate("clientId", "name email avatar")
+      .populate("clientId", "name email avatar honorScore")
       .populate(
         "freelancerId",
         "title hourlyRate fixedPrice pricingType user profilePic name category",
@@ -116,31 +95,22 @@ router.get("/:id", protect, async (req, res) => {
 
     if (!booking) return res.status(404).json({ msg: "Booking not found" });
 
-    const freelancer = await Freelancer.findById(booking.freelancerId);
+    const fl = await Freelancer.findById(booking.freelancerId).lean();
     const isClient =
       booking.clientId._id.toString() === req.user._id.toString();
-    const isFreelancer =
-      freelancer?.user?.toString() === req.user._id.toString();
+    const isFreelancer = fl?.user?.toString() === req.user._id.toString();
     const isAdmin = req.user.role === "admin";
 
     if (!isClient && !isFreelancer && !isAdmin)
       return res.status(403).json({ msg: "Access denied" });
 
     res.json({ success: true, booking });
-  } catch (err) {
+  } catch {
     res.status(500).json({ msg: "Server error" });
   }
 });
 
-// ─────────────────────────────────────────────────────────
-// POST /api/bookings
-//
-// Digital booking modes:
-//   1. advancePayment: true  → charge freelancer's advanceAmount upfront
-//   2. estimatedHours: N     → charge N × hourlyRate upfront
-//
-// Field booking: date/time/address required, no upfront payment.
-// ─────────────────────────────────────────────────────────
+// ── POST /api/bookings ────────────────────────────────────────────
 router.post("/", protect, authorize("client"), async (req, res) => {
   const {
     freelancer_id,
@@ -149,15 +119,13 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     preferredDate,
     preferredTime,
     address,
-    // Digital-only fields
-    advancePayment, // boolean — pay advance (duration unknown)
-    estimatedHours, // number  — pay for known hours
+    advancePayment,
+    estimatedHours,
   } = req.body;
 
   try {
-    if (!freelancer_id || !serviceType) {
+    if (!freelancer_id || !serviceType)
       return res.status(400).json({ msg: "Missing required fields" });
-    }
 
     const freelancer = await Freelancer.findById(freelancer_id).populate(
       "user",
@@ -166,85 +134,76 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     if (!freelancer)
       return res.status(404).json({ msg: "Freelancer not found" });
 
-    if (!freelancer.user?.phone || !freelancer.user.phone.trim()) {
-      return res.status(400).json({
-        msg: "This freelancer has not added their mobile number yet and cannot receive bookings.",
-      });
-    }
+    if (!freelancer.user?.phone?.trim())
+      return res
+        .status(400)
+        .json({
+          msg: "This freelancer has not added their mobile number yet.",
+        });
 
     const isDigital = freelancer.category === "digital";
 
-    // ── Validate field-only requirements ───────────────
     if (!isDigital) {
-      if (!preferredDate || !preferredTime || !address) {
-        return res.status(400).json({
-          msg: "Date, time, and address are required for field service bookings",
-        });
-      }
-      // ── Reject past dates ────────────────────────────
-      const today = new Date().toISOString().split("T")[0];
-      if (preferredDate < today) {
-        return res.status(400).json({
-          msg: "Cannot book a date in the past. Please select today or a future date.",
-        });
-      }
+      if (!preferredDate || !preferredTime || !address)
+        return res
+          .status(400)
+          .json({
+            msg: "Date, time, and address are required for field bookings",
+          });
+
+      if (preferredDate < new Date().toISOString().split("T")[0])
+        return res.status(400).json({ msg: "Cannot book a past date." });
     }
 
-    const estimatedDurationMinutes = getServiceDuration(serviceType);
-
-    // ── Compute timing ─────────────────────────────────
-    let startTime, endTime;
+    const durationMinutes = getServiceDuration(serviceType);
     const dateStr = isDigital
       ? new Date().toISOString().split("T")[0]
       : preferredDate;
     const timeStr = isDigital ? "00:00" : preferredTime;
 
-    startTime = new Date(`${dateStr}T${timeStr}`);
+    let startTime = new Date(`${dateStr}T${timeStr}`);
     if (isNaN(startTime.getTime())) startTime = new Date();
-    endTime = new Date(startTime.getTime() + estimatedDurationMinutes * 60000);
+    const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
 
-    // ── Conflict check (field only) ────────────────────
+    // Conflict check for field bookings
     if (!isDigital) {
-      const conflict = await Booking.findOne({
+      const conflict = await Booking.exists({
         freelancerId: freelancer._id,
         status: { $in: ["pending", "confirmed"] },
         startTime: { $lt: endTime },
         endTime: { $gt: startTime },
       });
-      if (conflict) {
+      if (conflict)
         return res
           .status(409)
           .json({ msg: "Freelancer already booked at this time" });
-      }
     }
 
-    // ── Compute agreed amount ──────────────────────────
     let agreedAmount;
-    let bookingMode = "standard"; // for metadata
+    let bookingMode = "standard";
 
     if (isDigital && freelancer.pricingType === "hourly") {
       if (advancePayment) {
-        // Mode 1: Duration unknown — charge advance amount
         agreedAmount = freelancer.advanceAmount || 0;
         bookingMode = "advance";
-        if (agreedAmount < 1) {
-          return res.status(400).json({
-            msg: "Freelancer has not set an advance amount. Please contact them first.",
-          });
-        }
-      } else if (estimatedHours && estimatedHours > 0) {
-        // Mode 2: Duration known — charge hours × rate
+        if (agreedAmount < 1)
+          return res
+            .status(400)
+            .json({ msg: "Freelancer has not set an advance amount." });
+      } else if (estimatedHours > 0) {
         agreedAmount = parseFloat(
           (estimatedHours * (freelancer.hourlyRate || 0)).toFixed(2),
         );
         bookingMode = "hours";
       } else {
-        return res.status(400).json({
-          msg: "Please specify either advance payment or estimated hours for hourly digital services.",
-        });
+        return res
+          .status(400)
+          .json({
+            msg: "Specify advance payment or estimated hours for hourly digital services.",
+          });
       }
     } else {
-      agreedAmount = computeAgreedAmount(freelancer, estimatedDurationMinutes);
+      agreedAmount = computeAgreedAmount(freelancer, durationMinutes, 0);
     }
 
     const milestones =
@@ -258,7 +217,11 @@ router.post("/", protect, authorize("client"), async (req, res) => {
           }))
         : [];
 
-    // ── Create booking ─────────────────────────────────
+    // Digital deadline: 3 days from now
+    const deadline = isDigital
+      ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+      : undefined;
+
     const booking = await Booking.create({
       freelancerId: freelancer._id,
       clientId: req.user._id,
@@ -273,18 +236,16 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       startTime,
       endTime,
       estimatedDurationMinutes:
-        bookingMode === "hours"
-          ? estimatedHours * 60
-          : estimatedDurationMinutes,
+        bookingMode === "hours" ? estimatedHours * 60 : durationMinutes,
       pricingType: freelancer.pricingType,
       agreedAmount,
       milestones,
       bookingMode,
       paymentStatus: isDigital ? "unpaid" : "field_pending",
-      deadline: isDigital ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) : undefined,
+      deadline,
     });
 
-    await sendBookingCreated(freelancer.user, booking._id, {
+    await sendBookingCreated(freelancer.user._id, booking._id, {
       serviceType,
       date: dateStr,
     });
@@ -296,45 +257,38 @@ router.post("/", protect, authorize("client"), async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────
-// POST /api/bookings/:id/payment/create-order
-// ─────────────────────────────────────────────────────────
+// ── POST /api/bookings/:id/payment/create-order ───────────────────
 router.post(
   "/:id/payment/create-order",
   protect,
   authorize("client"),
   async (req, res) => {
     try {
-      // ── Phone number required before payment ──────────
-      const clientUser = await User.findById(req.user._id);
-      if (!clientUser?.phone || !clientUser.phone.trim()) {
-        return res.status(400).json({
-          msg: "Please add your mobile number in your profile before making a payment.",
-        });
-      }
+      const clientUser = await User.findById(req.user._id).lean();
+      if (!clientUser?.phone?.trim())
+        return res
+          .status(400)
+          .json({
+            msg: "Please add your mobile number before making a payment.",
+          });
 
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ msg: "Booking not found" });
 
-      if (booking.clientId.toString() !== req.user._id.toString()) {
+      if (booking.clientId.toString() !== req.user._id.toString())
         return res.status(403).json({ msg: "Unauthorized" });
-      }
-      if (booking.serviceCategory !== "digital") {
+      if (booking.serviceCategory !== "digital")
         return res
           .status(400)
           .json({ msg: "Payment not required for field bookings" });
-      }
-      if (booking.paymentStatus === "held") {
+      if (booking.paymentStatus === "held")
         return res.status(400).json({ msg: "Payment already completed" });
-      }
 
-      const amountInPaise = Math.round(booking.agreedAmount * 100);
-      if (amountInPaise < 100) {
-        return res.status(400).json({ msg: "Amount too small for payment" });
-      }
+      const paise = Math.round(booking.agreedAmount * 100);
+      if (paise < 100) return res.status(400).json({ msg: "Amount too small" });
 
       const order = await razorpay.orders.create({
-        amount: amountInPaise,
+        amount: paise,
         currency: "INR",
         receipt: `booking_${booking._id}`,
         notes: {
@@ -362,9 +316,7 @@ router.post(
   },
 );
 
-// ─────────────────────────────────────────────────────────
-// POST /api/bookings/:id/payment/verify
-// ─────────────────────────────────────────────────────────
+// ── POST /api/bookings/:id/payment/verify ─────────────────────────
 router.post(
   "/:id/payment/verify",
   protect,
@@ -374,47 +326,43 @@ router.post(
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
         req.body;
 
-      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature)
         return res
           .status(400)
           .json({ msg: "Missing payment verification fields" });
-      }
 
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ msg: "Booking not found" });
 
-      if (booking.clientId.toString() !== req.user._id.toString()) {
+      if (booking.clientId.toString() !== req.user._id.toString())
         return res.status(403).json({ msg: "Unauthorized" });
-      }
 
-      const isValid = verifyRazorpaySignature(
-        razorpay_order_id,
-        razorpay_payment_id,
-        razorpay_signature,
-      );
-
-      if (!isValid) {
+      if (
+        !verifyRazorpaySignature(
+          razorpay_order_id,
+          razorpay_payment_id,
+          razorpay_signature,
+        )
+      )
         return res
           .status(400)
           .json({ msg: "Payment verification failed. Invalid signature." });
-      }
 
       booking.razorpayOrderId = razorpay_order_id;
       booking.razorpayPaymentId = razorpay_payment_id;
       booking.paymentStatus = "held";
       booking.escrowAmount = booking.agreedAmount;
       booking.paidAt = new Date();
+      // Auto-release 7 days after payment (if client delays approval)
       booking.autoReleaseAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
       await booking.save();
 
-      // Notify freelancer that payment has been received in escrow
-      const freelancer = await Freelancer.findById(booking.freelancerId);
-      if (freelancer?.user) {
+      const fl = await Freelancer.findById(booking.freelancerId).lean();
+      if (fl?.user) {
         await notify({
-          userId: freelancer.user,
+          userId: fl.user,
           type: "payment_released",
-          message: `Payment of ₹${booking.agreedAmount?.toLocaleString("en-IN")} received in escrow for "${booking.serviceType}". Start working!`,
+          message: `₹${booking.agreedAmount.toLocaleString("en-IN")} received in escrow for "${booking.serviceType}". Start working!`,
           link: `/freelancer/bookings`,
         });
       }
@@ -431,11 +379,8 @@ router.post(
   },
 );
 
-// ─────────────────────────────────────────────────────────
-// POST /api/bookings/:id/payment/release
-// Client releases escrow payment to freelancer.
-// ✅ FIX: Now correctly notifies the FREELANCER (not the client)
-// ─────────────────────────────────────────────────────────
+// ── POST /api/bookings/:id/payment/release ────────────────────────
+// Client approves digital work and releases escrow
 router.post(
   "/:id/payment/release",
   protect,
@@ -445,54 +390,50 @@ router.post(
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ msg: "Booking not found" });
 
-      if (booking.clientId.toString() !== req.user._id.toString()) {
+      if (booking.clientId.toString() !== req.user._id.toString())
         return res.status(403).json({ msg: "Unauthorized" });
-      }
-      if (booking.serviceCategory !== "digital") {
+      if (booking.serviceCategory !== "digital")
         return res
           .status(400)
           .json({ msg: "Only digital bookings use escrow" });
-      }
-      if (booking.paymentStatus !== "held") {
+      if (booking.paymentStatus !== "held")
         return res.status(400).json({ msg: "Payment is not in escrow" });
-      }
-      if (booking.disputeLocked) {
+      if (booking.disputeLocked)
         return res
           .status(400)
           .json({ msg: "Booking locked due to active dispute" });
-      }
 
       booking.paymentStatus = "released";
       booking.releasedAmount = booking.escrowAmount;
       booking.releasedAt = new Date();
       booking.status = "completed";
-
       await booking.save();
 
-      // ✅ FIX: Notify the FREELANCER that payment was released to them.
-      // (Previously sendBookingCompleted was called for the CLIENT which was wrong.)
-      const freelancer = await Freelancer.findById(booking.freelancerId);
-      if (freelancer?.user) {
+      // Reward both parties +2 for clean completion
+      await rewardScore(req.user._id, 2);
+
+      const fl = await Freelancer.findById(booking.freelancerId).lean();
+      if (fl?.user) {
+        await rewardScore(fl.user, 2);
         await notify({
-          userId: freelancer.user,
+          userId: fl.user,
           type: "payment_released",
-          message: `Great news! ₹${booking.releasedAmount?.toLocaleString("en-IN")} has been released to you for "${booking.serviceType}".`,
+          message: `₹${booking.releasedAmount.toLocaleString("en-IN")} released to you for "${booking.serviceType}". Honor Score +2!`,
           link: `/freelancer/bookings`,
         });
       }
 
-      // Also notify the client that their approval was processed
       await notify({
         userId: booking.clientId,
         type: "booking_completed",
-        message: `You've approved "${booking.serviceType}" and released payment. Thank you!`,
-        link: `/bookings`,
+        message: `You approved "${booking.serviceType}" and released payment. Honor Score +2!`,
+        link: `/bookings/${booking._id}`,
       });
 
       return res.json({
         success: true,
         booking,
-        message: "Payment released to freelancer successfully",
+        message: "Payment released to freelancer",
       });
     } catch (err) {
       console.error("RELEASE PAYMENT ERROR:", err);
@@ -501,53 +442,46 @@ router.post(
   },
 );
 
-// ─────────────────────────────────────────────────────────
-// POST /api/bookings/:id/payment/refund
-// Admin-initiated refund.
-// ─────────────────────────────────────────────────────────
-router.post("/:id/payment/refund", protect, async (req, res) => {
-  try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ msg: "Admin only" });
+// ── POST /api/bookings/:id/payment/refund (admin) ─────────────────
+router.post(
+  "/:id/payment/refund",
+  protect,
+  authorize("admin"),
+  async (req, res) => {
+    try {
+      const booking = await Booking.findById(req.params.id);
+      if (!booking) return res.status(404).json({ msg: "Booking not found" });
+      if (booking.paymentStatus !== "held")
+        return res.status(400).json({ msg: "Payment is not in escrow" });
+
+      const paise = Math.round(booking.escrowAmount * 100);
+      const refund = await razorpay.payments.refund(booking.razorpayPaymentId, {
+        amount: paise,
+      });
+
+      booking.paymentStatus = "refunded";
+      booking.refundedAmount = booking.escrowAmount;
+      booking.razorpayRefundId = refund.id;
+      booking.refundedAt = new Date();
+      booking.status = "cancelled";
+      await booking.save();
+
+      await notify({
+        userId: booking.clientId,
+        type: "payment_released",
+        message: `₹${booking.refundedAmount.toLocaleString("en-IN")} refunded for "${booking.serviceType}".`,
+        link: `/bookings/${booking._id}`,
+      });
+
+      return res.json({ success: true, booking, refundId: refund.id });
+    } catch (err) {
+      console.error("REFUND ERROR:", err);
+      return res.status(500).json({ msg: "Failed to process refund" });
     }
+  },
+);
 
-    const booking = await Booking.findById(req.params.id);
-    if (!booking) return res.status(404).json({ msg: "Booking not found" });
-    if (booking.paymentStatus !== "held") {
-      return res.status(400).json({ msg: "Payment is not in escrow" });
-    }
-
-    const amountInPaise = Math.round(booking.escrowAmount * 100);
-    const refund = await razorpay.payments.refund(booking.razorpayPaymentId, {
-      amount: amountInPaise,
-    });
-
-    booking.paymentStatus = "refunded";
-    booking.refundedAmount = booking.escrowAmount;
-    booking.razorpayRefundId = refund.id;
-    booking.refundedAt = new Date();
-    booking.status = "cancelled";
-
-    await booking.save();
-
-    // Notify the client about the refund
-    await notify({
-      userId: booking.clientId,
-      type: "payment_released",
-      message: `Your payment of ₹${booking.refundedAmount?.toLocaleString("en-IN")} for "${booking.serviceType}" has been refunded.`,
-      link: `/bookings`,
-    });
-
-    return res.json({ success: true, booking, refundId: refund.id });
-  } catch (err) {
-    console.error("REFUND ERROR:", err);
-    return res.status(500).json({ msg: "Failed to process refund" });
-  }
-});
-
-// ─────────────────────────────────────────────────────────
-// PATCH /api/bookings/:id/status
-// ─────────────────────────────────────────────────────────
+// ── PATCH /api/bookings/:id/status (freelancer) ───────────────────
 router.patch(
   "/:id/status",
   protect,
@@ -556,68 +490,209 @@ router.patch(
     const { status } = req.body;
     if (
       !["confirmed", "in_progress", "completed", "cancelled"].includes(status)
-    ) {
+    )
       return res.status(400).json({ msg: "Invalid status" });
-    }
 
     try {
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ msg: "Booking not found" });
 
-      const freelancer = await Freelancer.findOne({ user: req.user._id });
-      if (
-        !freelancer ||
-        booking.freelancerId.toString() !== freelancer._id.toString()
-      ) {
+      const fl = await Freelancer.findOne({ user: req.user._id });
+      if (!fl || booking.freelancerId.toString() !== fl._id.toString())
         return res.status(403).json({ msg: "Unauthorized" });
-      }
-      if (booking.status === "cancelled") {
+
+      if (booking.status === "cancelled")
         return res
           .status(400)
           .json({ msg: "Cannot update a cancelled booking" });
-      }
-      if (booking.disputeLocked) {
+      if (booking.disputeLocked)
         return res
           .status(400)
           .json({ msg: "Booking locked due to active dispute" });
-      }
 
-      // ── Prevent marking future work as completed ──────
       if (status === "completed" || status === "in_progress") {
-        const bookingDate = booking.startTime || new Date(booking.preferredDate);
-        if (bookingDate > new Date()) {
-          return res.status(400).json({
-            msg: "Cannot mark a future booking as completed or in-progress. The work date has not arrived yet.",
-          });
-        }
+        const bookingDate =
+          booking.startTime || new Date(booking.preferredDate);
+        if (bookingDate > new Date())
+          return res
+            .status(400)
+            .json({ msg: "The work date has not arrived yet." });
       }
 
       let newStatus = status;
-      if (booking.serviceCategory === "digital" && status === "completed") {
-        newStatus = "in_progress";
+
+      if (status === "completed") {
+        if (booking.serviceCategory === "digital") {
+          // Digital: go to in_progress (client must approve + release)
+          newStatus = "in_progress";
+        } else {
+          // Field: go to pending_approval (client must confirm)
+          // Require arrival verification for field bookings
+          if (!booking.arrivalVerified) {
+            return res.status(400).json({
+              msg: "Please mark your arrival at the client location before completing the booking.",
+            });
+          }
+          newStatus = "pending_approval";
+        }
       }
 
       booking.status = newStatus;
       await booking.save();
 
       const meta = { serviceType: booking.serviceType };
-      if (status === "confirmed")
+      if (status === "confirmed") {
         await sendBookingConfirmed(booking.clientId, booking._id, meta);
-      else if (status === "completed")
-        await sendBookingCompleted(booking.clientId, booking._id, meta);
-      else if (status === "cancelled")
+      } else if (status === "completed") {
+        if (booking.serviceCategory === "digital") {
+          // Notify client to review and release
+          await notify({
+            userId: booking.clientId,
+            type: "booking_completed",
+            message: `Freelancer marked "${booking.serviceType}" as delivered. Please review and release payment.`,
+            link: `/bookings/${booking._id}`,
+          });
+        } else {
+          // Field: notify client to confirm
+          await notify({
+            userId: booking.clientId,
+            type: "booking_completed",
+            message: `Your freelancer marked "${booking.serviceType}" as complete. Please confirm or raise a dispute within 48 hours.`,
+            link: `/bookings/${booking._id}`,
+          });
+        }
+      } else if (status === "cancelled") {
         await sendBookingCancelled(booking.clientId, booking._id, meta);
+        // Penalise freelancer for cancelling confirmed bookings
+        if (["confirmed", "in_progress"].includes(booking.status)) {
+          await deductScore(
+            req.user._id,
+            5,
+            `Cancelled booking "${booking.serviceType}"`,
+          );
+        }
+      }
 
-      return res.status(200).json({ success: true, booking });
+      return res.json({ success: true, booking });
     } catch (err) {
+      console.error("UPDATE STATUS ERROR:", err);
       return res.status(500).json({ msg: "Failed to update booking status" });
     }
   },
 );
 
-// ─────────────────────────────────────────────────────────
-// PATCH /api/bookings/:id/milestone/:milestoneId
-// ─────────────────────────────────────────────────────────
+// ── PATCH /api/bookings/:id/arrive (field freelancer GPS check-in) ─
+router.patch(
+  "/:id/arrive",
+  protect,
+  authorize("freelancer"),
+  async (req, res) => {
+    try {
+      const { latitude, longitude } = req.body;
+      if (latitude === undefined || longitude === undefined)
+        return res.status(400).json({ msg: "GPS coordinates required" });
+
+      const lat = parseFloat(latitude);
+      const lng = parseFloat(longitude);
+      if (isNaN(lat) || isNaN(lng))
+        return res.status(400).json({ msg: "Invalid coordinates" });
+
+      const booking = await Booking.findById(req.params.id);
+      if (!booking) return res.status(404).json({ msg: "Booking not found" });
+
+      const fl = await Freelancer.findOne({ user: req.user._id });
+      if (!fl || booking.freelancerId.toString() !== fl._id.toString())
+        return res.status(403).json({ msg: "Unauthorized" });
+
+      if (booking.serviceCategory !== "field")
+        return res
+          .status(400)
+          .json({ msg: "Arrival marking is for field bookings only" });
+
+      if (!["confirmed", "in_progress"].includes(booking.status))
+        return res
+          .status(400)
+          .json({ msg: "Cannot mark arrival for this booking status" });
+
+      booking.arrivedAt = new Date();
+      booking.arrivalLat = lat;
+      booking.arrivalLng = lng;
+      booking.arrivalVerified = true;
+      if (booking.status === "confirmed") booking.status = "in_progress";
+      await booking.save();
+
+      await notify({
+        userId: booking.clientId,
+        type: "booking_confirmed",
+        message: `Your freelancer has arrived at your location for "${booking.serviceType}".`,
+        link: `/bookings/${booking._id}`,
+      });
+
+      return res.json({ success: true, booking });
+    } catch (err) {
+      console.error("ARRIVE ERROR:", err);
+      return res.status(500).json({ msg: "Server error" });
+    }
+  },
+);
+
+// ── PATCH /api/bookings/:id/confirm-field (client confirms field work) ─
+router.patch(
+  "/:id/confirm-field",
+  protect,
+  authorize("client"),
+  async (req, res) => {
+    try {
+      const booking = await Booking.findById(req.params.id);
+      if (!booking) return res.status(404).json({ msg: "Booking not found" });
+
+      if (booking.clientId.toString() !== req.user._id.toString())
+        return res.status(403).json({ msg: "Unauthorized" });
+      if (booking.serviceCategory !== "field")
+        return res.status(400).json({ msg: "Only for field bookings" });
+      if (booking.status !== "pending_approval")
+        return res
+          .status(400)
+          .json({ msg: "Booking is not awaiting your approval" });
+      if (booking.disputeLocked)
+        return res
+          .status(400)
+          .json({ msg: "Booking is locked due to a dispute" });
+
+      booking.status = "completed";
+      booking.paymentStatus = "field_paid";
+      await booking.save();
+
+      // Reward both parties +2 for clean completion
+      await rewardScore(req.user._id, 2);
+
+      const fl = await Freelancer.findById(booking.freelancerId).lean();
+      if (fl?.user) {
+        await rewardScore(fl.user, 2);
+        await notify({
+          userId: fl.user,
+          type: "booking_completed",
+          message: `Client confirmed your work on "${booking.serviceType}". Honor Score +2!`,
+          link: `/freelancer/bookings`,
+        });
+      }
+
+      await notify({
+        userId: booking.clientId,
+        type: "booking_completed",
+        message: `You confirmed "${booking.serviceType}" as completed. Honor Score +2!`,
+        link: `/bookings/${booking._id}`,
+      });
+
+      return res.json({ success: true, booking });
+    } catch (err) {
+      console.error("CONFIRM FIELD ERROR:", err);
+      return res.status(500).json({ msg: "Server error" });
+    }
+  },
+);
+
+// ── PATCH /api/bookings/:id/milestone/:milestoneId ────────────────
 router.patch(
   "/:id/milestone/:milestoneId",
   protect,
@@ -631,8 +706,8 @@ router.patch(
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ msg: "Booking not found" });
 
-      const freelancer = await Freelancer.findOne({ user: req.user._id });
-      if (booking.freelancerId.toString() !== freelancer?._id.toString())
+      const fl = await Freelancer.findOne({ user: req.user._id });
+      if (booking.freelancerId.toString() !== fl?._id.toString())
         return res.status(403).json({ msg: "Unauthorized" });
 
       const milestone = booking.milestones.id(req.params.milestoneId);
@@ -641,19 +716,28 @@ router.patch(
 
       milestone.status = status;
       await booking.save();
+
+      if (status === "submitted") {
+        await notify({
+          userId: booking.clientId,
+          type: "booking_completed",
+          message: `Milestone "${milestone.title}" submitted for "${booking.serviceType}". Please review and approve.`,
+          link: `/bookings/${booking._id}`,
+        });
+      }
+
       res.json({ success: true, booking });
-    } catch (err) {
+    } catch {
       res.status(500).json({ msg: "Server error" });
     }
   },
 );
 
-// ─────────────────────────────────────────────────────────
-// PATCH /api/bookings/:id/milestone/:milestoneId/approve
-// ─────────────────────────────────────────────────────────
+// ── PATCH /api/bookings/:id/milestone/:milestoneId/approve ─────────
 router.patch(
   "/:id/milestone/:milestoneId/approve",
   protect,
+  authorize("client"),
   async (req, res) => {
     try {
       const booking = await Booking.findById(req.params.id);
@@ -673,74 +757,28 @@ router.patch(
       const allDone = booking.milestones.every((m) =>
         ["approved", "released"].includes(m.status),
       );
-
       booking.paymentStatus = allDone ? "released" : "partially_released";
       if (allDone) {
         booking.status = "completed";
         booking.releasedAt = new Date();
+        await rewardScore(req.user._id, 2);
       }
 
       await booking.save();
 
-      // Notify freelancer about milestone approval
-      const freelancer = await Freelancer.findById(booking.freelancerId);
-      if (freelancer?.user) {
+      const fl = await Freelancer.findById(booking.freelancerId).lean();
+      if (fl?.user) {
+        if (allDone) await rewardScore(fl.user, 2);
         await notify({
-          userId: freelancer.user,
+          userId: fl.user,
           type: "payment_released",
-          message: `Milestone "${milestone.title}" approved! ₹${milestone.amount?.toLocaleString("en-IN")} released to you.`,
+          message: `Milestone "${milestone.title}" approved! ₹${milestone.amount.toLocaleString("en-IN")} released.`,
           link: `/freelancer/bookings`,
         });
       }
 
       res.json({ success: true, booking });
-    } catch (err) {
-      res.status(500).json({ msg: "Server error" });
-    }
-  },
-);
-
-// ─────────────────────────────────────────────────────────
-// PATCH /api/bookings/:id/field-paid
-// ─────────────────────────────────────────────────────────
-router.patch(
-  "/:id/field-paid",
-  protect,
-  authorize("freelancer"),
-  async (req, res) => {
-    try {
-      const booking = await Booking.findById(req.params.id);
-      if (!booking) return res.status(404).json({ msg: "Booking not found" });
-
-      const freelancer = await Freelancer.findOne({ user: req.user._id });
-      if (
-        !freelancer ||
-        booking.freelancerId.toString() !== freelancer._id.toString()
-      ) {
-        return res.status(403).json({ msg: "Unauthorized" });
-      }
-      if (booking.serviceCategory !== "field") {
-        return res.status(400).json({ msg: "Only for field bookings" });
-      }
-
-      // ── Prevent marking future work as field-paid ─────
-      const bookingDate = booking.startTime || new Date(booking.preferredDate);
-      if (bookingDate > new Date()) {
-        return res.status(400).json({
-          msg: "Cannot mark a future booking as paid. The work date has not arrived yet.",
-        });
-      }
-
-      booking.paymentStatus = "field_paid";
-      booking.status = "completed";
-      await booking.save();
-
-      await sendBookingCompleted(booking.clientId, booking._id, {
-        serviceType: booking.serviceType,
-      });
-
-      return res.json({ success: true, booking });
-    } catch (err) {
+    } catch {
       res.status(500).json({ msg: "Server error" });
     }
   },

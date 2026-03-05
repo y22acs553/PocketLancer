@@ -1,28 +1,32 @@
+// server/routes/disputes.js
 import express from "express";
 import multer from "multer";
 import cloudinary from "../config/cloudinary.js";
 import Dispute from "../models/Dispute.js";
 import Booking from "../models/Booking.js";
 import Freelancer from "../models/Freelancer.js";
+import User from "../models/User.js";
 import { protect, authorize } from "../middleware/auth.js";
 import {
   sendDisputeCreated,
   sendDisputeResolved,
 } from "../services/notificationService.js";
-import User from "../models/User.js";
+import { deductScore } from "../services/honorScoreService.js";
 import Razorpay from "razorpay";
 
 const router = express.Router();
+
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 4 * 1024 * 1024 },
 });
 
-// GET /api/disputes (admin)
+// ── GET /api/disputes (admin) ─────────────────────────────────────
 router.get("/", protect, authorize("admin"), async (req, res) => {
   try {
     const q = req.query.status ? { status: req.query.status } : {};
@@ -30,33 +34,36 @@ router.get("/", protect, authorize("admin"), async (req, res) => {
       .populate({
         path: "bookingId",
         populate: [
-          { path: "clientId", select: "name email avatar" },
+          { path: "clientId", select: "name email avatar honorScore" },
           { path: "freelancerId", select: "title user profilePic name" },
         ],
       })
-      .populate("raisedBy", "name email avatar role")
+      .populate("raisedBy", "name email avatar role honorScore")
       .sort({ createdAt: -1 });
     res.json(disputes);
-  } catch (err) {
+  } catch {
     res.status(500).json({ msg: "Server error" });
   }
 });
 
-// GET /api/disputes/my
+// ── GET /api/disputes/my ──────────────────────────────────────────
 router.get("/my", protect, async (req, res) => {
   try {
-    const clientBookings = await Booking.find({
+    const clientBookingIds = await Booking.find({
       clientId: req.user._id,
-    }).select("_id");
+    }).distinct("_id");
+
     let flBookingIds = [];
     if (req.user.role === "freelancer") {
-      const fl = await Freelancer.findOne({ user: req.user._id });
+      const fl = await Freelancer.findOne({ user: req.user._id }).lean();
       if (fl) {
-        const flB = await Booking.find({ freelancerId: fl._id }).select("_id");
-        flBookingIds = flB.map((b) => b._id);
+        flBookingIds = await Booking.find({ freelancerId: fl._id }).distinct(
+          "_id",
+        );
       }
     }
-    const allIds = [...clientBookings.map((b) => b._id), ...flBookingIds];
+
+    const allIds = [...clientBookingIds, ...flBookingIds];
     const disputes = await Dispute.find({
       $or: [{ raisedBy: req.user._id }, { bookingId: { $in: allIds } }],
     })
@@ -69,6 +76,7 @@ router.get("/my", protect, async (req, res) => {
       })
       .populate("raisedBy", "name email avatar")
       .sort({ createdAt: -1 });
+
     res.json({ success: true, disputes });
   } catch (err) {
     console.error("MY DISPUTES:", err);
@@ -76,7 +84,7 @@ router.get("/my", protect, async (req, res) => {
   }
 });
 
-// GET /api/disputes/:id
+// ── GET /api/disputes/:id ─────────────────────────────────────────
 router.get("/:id", protect, async (req, res) => {
   try {
     const dispute = await Dispute.findById(req.params.id)
@@ -88,19 +96,27 @@ router.get("/:id", protect, async (req, res) => {
         ],
       })
       .populate("raisedBy", "name email avatar role");
+
     if (!dispute) return res.status(404).json({ msg: "Dispute not found" });
+
     const booking = dispute.bookingId;
     const isClient =
       booking?.clientId?._id?.toString() === req.user._id.toString();
     const isRaiser =
       dispute.raisedBy?._id?.toString() === req.user._id.toString();
     const isAdmin = req.user.role === "admin";
-    if (!isClient && !isRaiser && !isAdmin) {
-      const fl = await Freelancer.findOne({ user: req.user._id });
-      const isFreelancer =
+
+    // FIX: check freelancer via Freelancer model
+    let isFreelancer = false;
+    if (req.user.role === "freelancer") {
+      const fl = await Freelancer.findOne({ user: req.user._id }).lean();
+      isFreelancer =
         fl && booking?.freelancerId?._id?.toString() === fl._id.toString();
-      if (!isFreelancer) return res.status(403).json({ msg: "Access denied" });
     }
+
+    if (!isClient && !isRaiser && !isAdmin && !isFreelancer)
+      return res.status(403).json({ msg: "Access denied" });
+
     res.json({ success: true, dispute });
   } catch (err) {
     console.error("GET DISPUTE:", err);
@@ -108,7 +124,7 @@ router.get("/:id", protect, async (req, res) => {
   }
 });
 
-// POST /api/disputes
+// ── POST /api/disputes ────────────────────────────────────────────
 router.post("/", protect, async (req, res) => {
   const { bookingId, reason } = req.body;
   try {
@@ -116,31 +132,71 @@ router.post("/", protect, async (req, res) => {
       .populate("clientId")
       .populate("freelancerId");
     if (!booking) return res.status(404).json({ msg: "Booking not found" });
-    const allowed =
-      booking.clientId._id.toString() === req.user._id.toString() ||
-      booking.freelancerId._id.toString() === req.user._id.toString();
-    if (!allowed) return res.status(403).json({ msg: "Unauthorized" });
-    if (!["completed", "confirmed"].includes(booking.status))
-      return res
-        .status(400)
-        .json({ msg: "Can only dispute confirmed or completed bookings" });
+
+    const isClient =
+      booking.clientId._id.toString() === req.user._id.toString();
+
+    // FIX: compare against Freelancer's user field, not the Freelancer _id
+    let isFreelancer = false;
+    if (req.user.role === "freelancer") {
+      const fl = await Freelancer.findOne({ user: req.user._id }).lean();
+      isFreelancer =
+        fl && booking.freelancerId._id.toString() === fl._id.toString();
+    }
+
+    if (!isClient && !isFreelancer)
+      return res.status(403).json({ msg: "Unauthorized" });
+
+    // ── Block disputes after money has already moved ──────────────
+    // "released"   = client approved and paid freelancer → too late to dispute
+    // "refunded"   = money already returned to client → nothing to dispute
+    // "field_paid" = field work confirmed and paid → too late
+    if (["released", "refunded", "field_paid"].includes(booking.paymentStatus))
+      return res.status(400).json({
+        msg:
+          booking.paymentStatus === "refunded"
+            ? "This booking was already refunded — no dispute needed."
+            : "Payment has already been released. Raise disputes before approving payment.",
+      });
+
+    // Only active bookings can be disputed (not yet paid out)
+    if (
+      !["confirmed", "in_progress", "pending_approval", "completed"].includes(
+        booking.status,
+      )
+    )
+      return res.status(400).json({ msg: "Can only dispute active bookings" });
+
+    // Digital: dispute window is while payment is held (in_progress).
+    // Once client clicks Release, paymentStatus becomes "released" — blocked above.
+    // Extra guard: if completed + digital, money is already gone.
+    if (booking.status === "completed" && booking.serviceCategory === "digital")
+      return res.status(400).json({
+        msg: "Digital booking completed and payment released. Disputes must be raised before releasing payment.",
+      });
+
     const existing = await Dispute.findOne({ bookingId });
     if (existing)
-      return res.status(409).json({ msg: "Dispute already exists" });
+      return res
+        .status(409)
+        .json({ msg: "Dispute already exists for this booking" });
+
     const dispute = await Dispute.create({
       bookingId,
       raisedBy: req.user._id,
       reason,
     });
+
     await sendDisputeCreated(booking.clientId._id, dispute._id);
     await sendDisputeCreated(booking.freelancerId.user, dispute._id);
-    const admins = await User.find({ role: "admin" }).select("_id").lean();
-    await Promise.all(
-      admins.map((a) => sendDisputeCreated(a._id, dispute._id)),
-    );
+
+    const admins = await User.find({ role: "admin" }).distinct("_id");
+    await Promise.all(admins.map((id) => sendDisputeCreated(id, dispute._id)));
+
     booking.status = "disputed";
     booking.disputeLocked = true;
     await booking.save();
+
     res.status(201).json({ success: true, dispute });
   } catch (err) {
     console.error("CREATE DISPUTE:", err);
@@ -148,126 +204,151 @@ router.post("/", protect, async (req, res) => {
   }
 });
 
-// POST /api/disputes/:id/evidence
+// ── POST /api/disputes/:id/evidence ──────────────────────────────
 router.post(
   "/:id/evidence",
   protect,
-  (req, res, next) => {
-    upload.single("file")(req, res, (err) => {
-      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json({ msg: "Evidence file size exceeds 10MB limit." });
-      } else if (err) {
-        return res.status(400).json({ msg: "Upload error: " + err.message });
-      }
-      next();
-    });
-  },
+  upload.single("file"),
   async (req, res) => {
     try {
       const dispute = await Dispute.findById(req.params.id);
       if (!dispute) return res.status(404).json({ msg: "Dispute not found" });
       if (!req.file) return res.status(400).json({ msg: "No file uploaded" });
+
       const b64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
       const result = await cloudinary.uploader.upload(b64, {
         folder: "pocketlancer/disputes",
       });
+
       dispute.evidence.push({
         url: result.secure_url,
         type: req.file.mimetype.includes("pdf") ? "pdf" : "image",
         uploadedBy: req.user._id,
       });
       await dispute.save();
+
       res.json({ success: true, url: result.secure_url });
-    } catch (err) {
+    } catch {
       res.status(500).json({ msg: "Upload failed" });
     }
   },
 );
 
-// PATCH /api/disputes/:id/status (admin: open → under_review)
+// ── PATCH /api/disputes/:id/status (admin) ────────────────────────
 router.patch("/:id/status", protect, authorize("admin"), async (req, res) => {
   try {
     const { status } = req.body;
     if (!["open", "under_review"].includes(status))
       return res.status(400).json({ msg: "Invalid status" });
+
     const dispute = await Dispute.findByIdAndUpdate(
       req.params.id,
       { status },
       { new: true },
     );
     if (!dispute) return res.status(404).json({ msg: "Not found" });
+
     res.json({ success: true, dispute });
-  } catch (err) {
+  } catch {
     res.status(500).json({ msg: "Server error" });
   }
 });
 
-// PATCH /api/disputes/:id/resolve (admin)
+// ── PATCH /api/disputes/:id/resolve (admin) ───────────────────────
 router.patch("/:id/resolve", protect, authorize("admin"), async (req, res) => {
   const { resolution, adminNotes } = req.body;
   if (
-    !["release_to_freelancer", "refund_to_client", "split"].includes(resolution)
-  ) {
+    !["refund_to_client", "release_to_freelancer", "split"].includes(resolution)
+  )
     return res.status(400).json({ msg: "Invalid resolution" });
-  }
+  if (!adminNotes?.trim())
+    return res.status(400).json({ msg: "Admin notes are required" });
+
   try {
     const dispute = await Dispute.findById(req.params.id);
-    if (!dispute) return res.status(404).json({ msg: "Not found" });
+    if (!dispute) return res.status(404).json({ msg: "Dispute not found" });
     if (dispute.status === "resolved")
       return res.status(400).json({ msg: "Already resolved" });
+
+    const booking = await Booking.findById(dispute.bookingId)
+      .populate("clientId", "_id")
+      .populate("freelancerId", "user");
+    if (!booking) return res.status(404).json({ msg: "Booking not found" });
+
     dispute.status = "resolved";
     dispute.resolution = resolution;
-    dispute.adminNotes = adminNotes || "";
+    dispute.adminNotes = adminNotes;
     await dispute.save();
-    const booking = await Booking.findById(dispute.bookingId)
-      .populate("clientId")
-      .populate({
-        path: "freelancerId",
-        populate: { path: "user", select: "_id" },
-      });
-    if (booking) {
-      booking.disputeLocked = false;
-      if (booking.paymentStatus === "held" && booking.razorpayPaymentId) {
-        try {
-          if (resolution === "refund_to_client") {
-            const refund = await razorpay.payments.refund(
-              booking.razorpayPaymentId,
-              { amount: booking.escrowAmount * 100 },
-            );
-            booking.paymentStatus = "refunded";
-            booking.refundedAmount = booking.escrowAmount;
-            booking.refundedAt = new Date();
-            booking.razorpayRefundId = refund.id;
-          } else if (resolution === "release_to_freelancer") {
-            booking.paymentStatus = "released";
-            booking.releasedAmount = booking.escrowAmount;
-            booking.releasedAt = new Date();
-          } else if (resolution === "split") {
-            const half = Math.round(booking.escrowAmount / 2);
-            const refund = await razorpay.payments.refund(
-              booking.razorpayPaymentId,
-              { amount: half * 100 },
-            );
-            booking.paymentStatus = "partial_refund";
-            booking.refundedAmount = half;
-            booking.releasedAmount = booking.escrowAmount - half;
-            booking.refundedAt = new Date();
-            booking.razorpayRefundId = refund.id;
-          }
-        } catch (payErr) {
-          console.error("Payment on resolve failed:", payErr.message);
-        }
+
+    booking.disputeLocked = false;
+
+    // Execute financial resolution for digital bookings
+    if (
+      booking.serviceCategory === "digital" &&
+      booking.paymentStatus === "held"
+    ) {
+      const paise = Math.round((booking.escrowAmount || 0) * 100);
+
+      if (resolution === "refund_to_client") {
+        const refund = await razorpay.payments
+          .refund(booking.razorpayPaymentId, { amount: paise })
+          .catch(() => null);
+        booking.paymentStatus = "refunded";
+        booking.refundedAmount = booking.escrowAmount;
+        if (refund) booking.razorpayRefundId = refund.id;
+        booking.refundedAt = new Date();
+        booking.status = "cancelled";
+        // Penalise freelancer
+        await deductScore(
+          booking.freelancerId.user,
+          10,
+          `Dispute resolved against you for "${booking.serviceType}"`,
+        );
+      } else if (resolution === "release_to_freelancer") {
+        booking.paymentStatus = "released";
+        booking.releasedAmount = booking.escrowAmount;
+        booking.releasedAt = new Date();
+        booking.status = "completed";
+        // Penalise client
+        await deductScore(
+          booking.clientId._id,
+          10,
+          `Dispute resolved against you for "${booking.serviceType}"`,
+        );
+      } else if (resolution === "split") {
+        const half = Math.floor(paise / 2);
+        await razorpay.payments
+          .refund(booking.razorpayPaymentId, { amount: half })
+          .catch(() => null);
+        booking.paymentStatus = "partial_refund";
+        booking.refundedAmount = booking.escrowAmount / 2;
+        booking.releasedAmount = booking.escrowAmount / 2;
+        booking.status = "completed";
+        // Penalise both
+        await deductScore(
+          booking.clientId._id,
+          5,
+          `Dispute split for "${booking.serviceType}"`,
+        );
+        await deductScore(
+          booking.freelancerId.user,
+          5,
+          `Dispute split for "${booking.serviceType}"`,
+        );
       }
-      await booking.save();
-      await sendDisputeResolved(booking.clientId._id, resolution);
-      const flUserId =
-        booking.freelancerId?.user?._id || booking.freelancerId?.user;
-      if (flUserId) await sendDisputeResolved(flUserId, resolution);
+    } else {
+      booking.status = "completed";
     }
+
+    await booking.save();
+
+    await sendDisputeResolved(booking.clientId._id, resolution);
+    await sendDisputeResolved(booking.freelancerId.user, resolution);
+
     res.json({ success: true, dispute });
   } catch (err) {
-    console.error("RESOLVE:", err);
-    res.status(500).json({ msg: "Resolution failed" });
+    console.error("RESOLVE DISPUTE:", err);
+    res.status(500).json({ msg: "Failed to resolve dispute" });
   }
 });
 

@@ -1,3 +1,4 @@
+// client/components/Header.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -12,7 +13,37 @@ import {
   Repeat,
   LayoutDashboard,
   CalendarDays,
+  Shield,
 } from "lucide-react";
+
+/** Honor score badge — reused in dropdown and wherever else needed */
+export function HonorScoreBadge({
+  score,
+  size = "md",
+}: {
+  score: number;
+  size?: "sm" | "md";
+}) {
+  const color =
+    score < 35
+      ? "bg-red-100 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20"
+      : score < 75
+        ? "bg-orange-100 text-orange-700 ring-orange-200 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20"
+        : "bg-emerald-100 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20";
+
+  const label = score < 35 ? "Low Trust" : score < 75 ? "Average" : "Trusted";
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full ring-1 font-black ${color} ${
+        size === "sm" ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-0.5 text-[10px]"
+      }`}
+    >
+      <Shield size={size === "sm" ? 8 : 9} />
+      {label} · {score}
+    </span>
+  );
+}
 
 export default function Header() {
   const { user, logout } = useUser();
@@ -21,7 +52,6 @@ export default function Header() {
 
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
   const isDashboardRoute = pathname.startsWith("/dashboard");
 
   useEffect(() => {
@@ -47,16 +77,14 @@ export default function Header() {
       const newRole = user.role === "client" ? "freelancer" : "client";
       await api.post("/auth/switch-role", { role: newRole });
       window.location.href = "/dashboard";
-    } catch (err) {
-      console.error("Switch role failed", err);
+    } catch {
       alert("Failed to switch role. Try again.");
     }
   };
 
   const goToDashboard = () => {
     if (!user) return;
-    if (user.role === "admin") router.push("/admin");
-    else router.push("/dashboard");
+    router.push(user.role === "admin" ? "/admin" : "/dashboard");
   };
 
   const goToProfile = () => {
@@ -66,117 +94,144 @@ export default function Header() {
     else if (user?.role === "admin") router.push("/admin");
   };
 
+  // Avatar ring color based on honor score
+  const avatarRing =
+    !user || user.honorScore === undefined
+      ? "ring-slate-300 dark:ring-slate-700"
+      : user.honorScore < 35
+        ? "ring-red-400"
+        : user.honorScore < 75
+          ? "ring-orange-400"
+          : "ring-emerald-400";
+
   return (
-    <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-950/80 backdrop-blur border-b border-slate-200 dark:border-white/10">
-      <div className="w-full px-4 sm:px-6 lg:px-12 py-4 flex items-center justify-between gap-4">
-        {/* Left Section */}
-        <Link href="/" className="flex items-center gap-3 shrink-0">
-          <div className="h-10 w-10 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black dark:bg-white dark:text-slate-900">
+    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-white/10 dark:bg-slate-950/80">
+      <div className="flex w-full items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-12">
+        {/* Logo */}
+        <Link href="/" className="flex shrink-0 items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-900 font-black text-white dark:bg-white dark:text-slate-900">
             P
           </div>
-          <div className="leading-tight hidden xs:block">
+          <div className="hidden leading-tight xs:block">
             <p className="font-black text-slate-900 dark:text-white">
               PocketLancer
             </p>
-            <p className="text-xs font-bold text-slate-500">
+            <p className="text-[10px] font-bold text-slate-500">
               Hire trusted freelancers
             </p>
           </div>
         </Link>
 
-        {/* Right Section */}
-        <div className="flex items-center gap-3 sm:gap-4">
+        {/* Right */}
+        <div className="flex items-center gap-3">
           {!user ? (
             <div className="flex items-center gap-3">
               <Link
                 href="/login"
-                className="text-sm font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-300"
+                className="text-sm font-bold text-slate-600 dark:text-slate-300"
               >
                 Login
               </Link>
               <Link
                 href="/register"
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 transition dark:bg-white dark:text-slate-900"
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white dark:bg-white dark:text-slate-900"
               >
                 Join Now
               </Link>
             </div>
           ) : (
             <>
-              {/* RESTORED: Go to Dashboard Button */}
               {!isDashboardRoute && (
                 <button
                   onClick={goToDashboard}
-                  className="rounded-xl bg-slate-900 px-4 py-2 text-xs sm:text-sm font-black text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 transition-all active:scale-95"
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white active:bg-slate-700 dark:bg-white dark:text-slate-900 sm:text-sm"
                 >
-                  Go to Dashboard
+                  Dashboard
                 </button>
               )}
 
-              {/* User Profile Dropdown */}
+              {/* Avatar + dropdown */}
               <div className="relative" ref={menuRef}>
                 <button
                   onClick={() => setOpen((s) => !s)}
-                  className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-2 sm:px-3 shadow-sm hover:bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:hover:bg-slate-900"
+                  className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm active:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:active:bg-slate-900 sm:px-3"
                 >
-                  <span className="h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center font-black text-xs dark:bg-white dark:text-slate-900">
+                  {/* Avatar with honor-score ring */}
+                  <span
+                    className={`flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 font-black text-xs text-white ring-2 dark:bg-white dark:text-slate-900 ${avatarRing}`}
+                  >
                     {user.name?.[0]?.toUpperCase() || "U"}
                   </span>
 
-                  {/* Name and Email hidden on smaller mobile to keep header thin */}
-                  <div className="text-left leading-tight hidden md:block">
+                  <div className="hidden text-left leading-tight md:block">
                     <p className="text-sm font-black text-slate-900 dark:text-white">
                       {user.name}
                     </p>
-                    <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                    <p className="text-[10px] font-bold text-slate-500">
                       {user.email}
                     </p>
                   </div>
-                  <ChevronDown size={16} className="text-slate-500" />
+                  <ChevronDown size={15} className="text-slate-500" />
                 </button>
 
                 {open && (
-                  <div className="absolute right-0 mt-3 w-56 overflow-hidden rounded-2xl border bg-white shadow-xl z-50 dark:bg-slate-950 dark:border-slate-800">
+                  <div className="absolute right-0 z-50 mt-2 w-60 overflow-hidden rounded-2xl border bg-white shadow-xl dark:border-slate-800 dark:bg-slate-950">
+                    {/* ── Honor score row ── */}
+                    {user.honorScore !== undefined && (
+                      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                        <span className="text-xs font-black text-slate-500 dark:text-slate-400">
+                          Honor Score
+                        </span>
+                        <HonorScoreBadge score={user.honorScore} />
+                      </div>
+                    )}
+
+                    {/* ── Menu items ── */}
                     <button
                       onClick={() => {
                         setOpen(false);
                         goToDashboard();
                       }}
-                      className="flex w-full items-center gap-3 px-4 py-4 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
                     >
-                      <LayoutDashboard size={16} /> Dashboard
+                      <LayoutDashboard size={15} /> Dashboard
                     </button>
-                    {user?.role === "freelancer" && (
+
+                    {user.role === "freelancer" && (
                       <button
                         onClick={() => {
                           setOpen(false);
                           router.push("/calendar");
                         }}
-                        className="flex w-full items-center gap-3 px-4 py-4 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                        className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
                       >
-                        <CalendarDays size={16} /> Calendar
+                        <CalendarDays size={15} /> Calendar
                       </button>
                     )}
+
                     <button
                       onClick={goToProfile}
-                      className="flex w-full items-center gap-3 px-4 py-4 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
                     >
-                      <UserIcon size={16} /> My Profile
+                      <UserIcon size={15} /> My Profile
                     </button>
+
                     {user.role !== "admin" && (
                       <button
                         onClick={handleSwitchRole}
-                        className="flex w-full items-center gap-3 px-4 py-4 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
+                        className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
                       >
-                        <Repeat size={16} /> Switch Role
+                        <Repeat size={15} /> Switch Role
                       </button>
                     )}
+
                     <div className="h-px bg-slate-100 dark:bg-slate-800" />
+
                     <button
                       onClick={handleLogout}
-                      className="flex w-full items-center gap-3 px-4 py-4 text-sm font-black text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-black text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
                     >
-                      <LogOut size={16} /> Logout
+                      <LogOut size={15} /> Logout
                     </button>
                   </div>
                 )}
