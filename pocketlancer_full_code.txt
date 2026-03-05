@@ -15,19 +15,23 @@ const config: CapacitorConfig = {
 
   plugins: {
     Geolocation: {
-      // Android: requires fine location permission
+      // Android: requires fine location permission (declared in AndroidManifest)
     },
     PushNotifications: {
       presentationOptions: ["badge", "sound", "alert"],
     },
     SplashScreen: {
       launchShowDuration: 1200,
-      backgroundColor: "#0f172a",
+      backgroundColor: "#F8FAFC", // slate-50 — light mode (was #0f172a dark)
       showSpinner: false,
+      androidScaleType: "CENTER_CROP",
+      splashFullScreen: true,
+      splashImmersive: true,
     },
     StatusBar: {
+      // "Dark" = dark-colored icons/text on status bar — correct for light backgrounds
       style: "Dark",
-      backgroundColor: "#0f172a",
+      backgroundColor: "#F8FAFC", // slate-50 — light background (was #0f172a dark)
     },
     Keyboard: {
       resize: "body",
@@ -36,12 +40,10 @@ const config: CapacitorConfig = {
   },
 
   android: {
-    // Minimum SDK 24 = Android 7.0
     minWebViewVersion: 60,
     allowMixedContent: false,
     captureInput: true,
-    // Prevents white flash on launch
-    backgroundColor: "#0f172a",
+    backgroundColor: "#F8FAFC", // slate-50 — prevents dark flash on launch (was #0f172a)
   },
 
   ios: {
@@ -2641,6 +2643,41 @@ export default function BookingDetailPage() {
   );
 }
 
+--- FILE: client/app/bookings/layout.tsx ---
+"use client";
+
+import { useUser } from "@/context/UserContext";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+import { Loader2 } from "lucide-react";
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useUser();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) router.replace("/login");
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-500 font-bold">
+          <Loader2 className="animate-spin" size={20} /> Loading...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  return (
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {children}
+    </div>
+  );
+}
+
 --- FILE: client/app/bookings/page.tsx ---
 "use client";
 
@@ -2648,6 +2685,41 @@ import MyBookingsPage from "@/components/MyBookingsPage";
 
 export default function Page() {
   return <MyBookingsPage />;
+}
+
+--- FILE: client/app/calendar/layout.tsx ---
+"use client";
+
+import { useUser } from "@/context/UserContext";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+import { Loader2 } from "lucide-react";
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useUser();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) router.replace("/login");
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-500 font-bold">
+          <Loader2 className="animate-spin" size={20} /> Loading...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  return (
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {children}
+    </div>
+  );
 }
 
 --- FILE: client/app/calendar/page.tsx ---
@@ -3115,6 +3187,41 @@ export default function FreelancerCalendarPage() {
         </div>
         {/* end grid */}
       </div>
+    </div>
+  );
+}
+
+--- FILE: client/app/client/layout.tsx ---
+"use client";
+
+import { useUser } from "@/context/UserContext";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+import { Loader2 } from "lucide-react";
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useUser();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) router.replace("/login");
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-500 font-bold">
+          <Loader2 className="animate-spin" size={20} /> Loading...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  return (
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {children}
     </div>
   );
 }
@@ -4553,31 +4660,21 @@ import { useUser } from "@/context/UserContext";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
-import DashboardHeader from "@/components/DashboardHeader";
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useUser();
   const router = useRouter();
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
-
-    // 🔴 Block admin from dashboard
-    if (!loading && user?.role === "admin") {
-      router.replace("/admin");
-    }
+    if (!loading && user?.role === "admin") router.replace("/admin");
   }, [user, loading, router]);
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-3 text-slate-600 font-bold">
-          <Loader2 className="animate-spin" />
-          Loading dashboard...
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-500 font-bold">
+          <Loader2 className="animate-spin" size={20} /> Loading dashboard...
         </div>
       </div>
     );
@@ -4586,9 +4683,9 @@ export default function DashboardLayout({
   if (!user) return null;
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      <DashboardHeader />
-      <main className="w-full px-4 sm:px-6 lg:px-12 py-8">{children}</main>
+    // max-w container + mobile bottom nav padding
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {children}
     </div>
   );
 }
@@ -4978,6 +5075,41 @@ export default function DisputeDetailPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+--- FILE: client/app/disputes/layout.tsx ---
+"use client";
+
+import { useUser } from "@/context/UserContext";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+import { Loader2 } from "lucide-react";
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useUser();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) router.replace("/login");
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-500 font-bold">
+          <Loader2 className="animate-spin" size={20} /> Loading...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  return (
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {children}
     </div>
   );
 }
@@ -6414,37 +6546,28 @@ export default function FreelancerLayout({ children }) {
   const router = useRouter();
   const pathname = usePathname();
 
+  // /freelancer/[id] = public profile — 3 path segments: ["", "freelancer", id]
   const isPublicProfile =
-    pathname.startsWith("/freelancer/") && pathname.split("/").length === 3; // /freelancer/[id]
+    pathname.startsWith("/freelancer/") && pathname.split("/").length === 3;
 
-  // ✅ Use stable primitives — never put the `user` object itself in deps.
-  //    Object reference changes on every context render, causing this effect
-  //    to fire repeatedly which floods the router and freezes navigation.
   const userId = user?._id ?? null;
   const userRole = user?.role ?? null;
 
   useEffect(() => {
-    if (loading) return;
-    if (isPublicProfile) return;
-
-    if (!userId) {
-      router.replace("/login");
-      return;
-    }
-
-    if (userRole !== "freelancer") {
-      router.replace("/dashboard");
-    }
+    if (loading || isPublicProfile) return;
+    if (!userId) { router.replace("/login"); return; }
+    if (userRole !== "freelancer") router.replace("/dashboard");
   }, [loading, userId, userRole, isPublicProfile, router]);
 
-  // Prevent flash
-  if (loading) return null;
+  if (loading && !isPublicProfile) return null;
 
-  if (!isPublicProfile && (!user || user.role !== "freelancer")) {
-    return null;
-  }
-
-  return <>{children}</>;
+  return (
+    // max-w container + mobile bottom nav padding
+    // Public profile pages (/freelancer/[id]) also get consistent padding
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {children}
+    </div>
+  );
 }
 
 --- FILE: client/app/freelancer/page.js ---
@@ -7964,30 +8087,71 @@ export default function FreelancerProfilePage() {
 @import "tailwindcss";
 
 @theme {
-  --color-brand-primary: #3b82f6;
-  --color-brand-secondary: #10b981;
-
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-/* Base styles */
-@layer base {
-  body {
-    @apply antialiased text-slate-900 bg-slate-50 dark:text-slate-100 dark:bg-slate-950;
-  }
+/**
+ * ── DISABLE DARK MODE (Tailwind v4) ────────────────────────────
+ *
+ * Tailwind v4 uses @media (prefers-color-scheme: dark) by default,
+ * which ignores tailwind.config.js. This line overrides the built-in
+ * `dark` variant to ONLY fire when a `.dark` class exists on an ancestor.
+ * Since ThemeInit never adds `.dark`, every `dark:` class in the app
+ * becomes permanently inert — on desktop AND Android/Capacitor.
+ */
+@variant dark (&:where(.dark *));
+
+/* ── Force light mode everywhere ──────────────────────────────── */
+html,
+body {
+  background-color: #f8fafc; /* slate-50 */
+  color: #0f172a; /* slate-900 */
 }
 
+/* Belt-and-suspenders: tell the browser this page is light-only */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  color-scheme: light;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --bottom-nav-height: 64px;
 }
 
-html.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
+html {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: none;
 }
-/* Keep leaflet overlays below header dropdown */
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.5);
+}
+
 .leaflet-container {
   z-index: 0 !important;
 }
@@ -7997,10 +8161,11 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Providers from "./providers";
-import HeaderWrapper from "@/components/HeaderWrapper";
-import Footer from "@/components/Footer";
+import SmartHeader from "@/components/SmartHeader";
+import FooterWrapper from "@/components/FooterWrapper";
 import ThemeInit from "@/components/ThemeInit";
 import FreelancerChatWidget from "@/components/FreelancerChatWidget";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -8009,25 +8174,31 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
 export const metadata: Metadata = {
   title: "PocketLancer | Professional Freelance Marketplace",
   description: "Connect with top talent and find your next big project.",
 };
+
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" style={{ colorScheme: "light" }}>
+      <head>
+        <meta name="color-scheme" content="light" />
+      </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen bg-slate-50 text-slate-900`}
       >
         <Providers>
-          <HeaderWrapper />
           <ThemeInit />
+          {/* SmartHeader: "/" → PublicHeader, everything else → DashboardHeader */}
+          <SmartHeader />
           <main className="flex-grow">{children}</main>
-          <Footer />
+          <FooterWrapper />
           {/* Global floating chat widget — visible on all pages for logged-in users */}
           <FreelancerChatWidget />
         </Providers>
@@ -9585,6 +9756,11 @@ export default function Page() {
 }
 
 --- FILE: client/app/search/page.tsx ---
+// client/app/search/page.tsx
+// NOTE: Only change here is adding the outer padding container.
+// The full component logic is unchanged — it receives this from the existing file.
+// This file wraps the content in a properly padded, max-width container.
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -9604,7 +9780,6 @@ import {
 
 type SortMode = "nearest" | "cheapest" | "toprated";
 
-// IMPORTANT: Leaflet must be client-only
 const FreelancerMiniMap = dynamic(
   () => import("@/components/FreelancerMiniMap"),
   { ssr: false },
@@ -9622,13 +9797,11 @@ function SkeletonCard() {
           </div>
           <div className="h-12 w-12 rounded-2xl bg-slate-200 dark:bg-slate-800" />
         </div>
-
         <div className="mt-5 flex gap-2">
           <div className="h-7 w-20 rounded-full bg-slate-200 dark:bg-slate-800" />
           <div className="h-7 w-24 rounded-full bg-slate-200 dark:bg-slate-800" />
           <div className="h-7 w-16 rounded-full bg-slate-200 dark:bg-slate-800" />
         </div>
-
         <div className="mt-6 flex items-center justify-between gap-4">
           <div className="h-12 w-32 rounded-2xl bg-slate-200 dark:bg-slate-800" />
           <div className="flex gap-3">
@@ -9659,19 +9832,12 @@ export default function SearchPage() {
 
   const applySort = (items: any[]) => {
     const list = [...items];
-
-    if (sortMode === "nearest") {
+    if (sortMode === "nearest")
       list.sort((a, b) => (a.distanceKm ?? 99999) - (b.distanceKm ?? 99999));
-    }
-
-    if (sortMode === "cheapest") {
+    if (sortMode === "cheapest")
       list.sort((a, b) => (a.hourlyRate ?? 999999) - (b.hourlyRate ?? 999999));
-    }
-
-    if (sortMode === "toprated") {
+    if (sortMode === "toprated")
       list.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-    }
-
     return list;
   };
 
@@ -9680,22 +9846,17 @@ export default function SearchPage() {
       setLoading(true);
       setError("");
 
-      const params: any = {
-        category,
-        skills,
-      };
+      const params: any = { category, skills };
 
       if (category === "field") {
         const pos = coords ?? (await getCurrentLocation());
         setCoords(pos);
-
         params.latitude = pos.latitude;
         params.longitude = pos.longitude;
         params.radiusKm = radiusKm;
       }
 
       const res = await api.get("/freelancers/search", { params });
-
       const list = res.data.freelancers || [];
       setFreelancers(applySort(list));
     } catch {
@@ -9715,18 +9876,18 @@ export default function SearchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // re-sort when sort mode changes (no extra API call)
   useEffect(() => {
     setFreelancers((prev) => applySort(prev));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortMode]);
+
   useEffect(() => {
     searchNearby();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
 
   const headerTitle = useMemo(() => {
-    if (skills.trim()) return `Freelancers for “${skills.trim()}”`;
+    if (skills.trim()) return `Freelancers for "${skills.trim()}"`;
     return "Find Freelancers Near You";
   }, [skills]);
 
@@ -9736,83 +9897,74 @@ export default function SearchPage() {
       if (sortMode === "toprated") return "Sorted by highest rating";
       return "Sorted by relevance";
     }
-
     if (sortMode === "nearest") return "Sorted by nearest professionals";
     if (sortMode === "cheapest") return "Sorted by lowest hourly rate";
     return "Sorted by highest rating";
   }, [sortMode, category]);
 
   return (
-    <div className="min-h-[calc(100vh-80px)] w-full">
-      {/* HERO */}
+    // ✅ Consistent padding + max-width container for all screen sizes
+    <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-8">
+      {/* HERO card */}
       <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
-        <div className="absolute -top-36 -right-36 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl" />
-        <div className="absolute -bottom-44 -left-44 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="absolute -top-36 -right-36 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-44 -left-44 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
 
-        {/* TOP SECTION: LEFT CONTENT + RIGHT MAP */}
-        <div className="relative px-6 py-10 sm:px-10">
+        {/* TOP SECTION */}
+        <div className="relative px-5 py-8 sm:px-8">
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
             {/* LEFT SIDE */}
             <div className="lg:col-span-7 space-y-6">
               {/* HERO TEXT */}
-              <div className="max-w-2xl">
+              <div>
                 <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
                   PocketLancer Search
                 </p>
-
-                <h1 className="mt-3 text-3xl font-black text-slate-900 sm:text-4xl dark:text-white">
+                <h1 className="mt-2 text-2xl font-black text-slate-900 sm:text-3xl dark:text-white">
                   {headerTitle}
                 </h1>
-
-                <p className="mt-3 text-sm font-bold text-slate-600 dark:text-slate-300">
+                <p className="mt-2 text-sm font-bold text-slate-600 dark:text-slate-300">
                   Search local verified professionals, compare pricing, then
                   book instantly.
                 </p>
-
-                <div className="mt-5 flex flex-wrap gap-3">
+                <div className="mt-4 flex flex-wrap gap-2">
                   <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                    <Users size={16} className="text-slate-400" />
+                    <Users size={14} className="text-slate-400" />
                     Real profiles
                   </span>
-
                   <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                    <MapPin size={16} className="text-slate-400" />
+                    <MapPin size={14} className="text-slate-400" />
                     Nearby results
                   </span>
                 </div>
               </div>
 
               {/* FILTER PANEL */}
-
-              <div className="w-full rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex gap-2 mb-6">
+              <div className="w-full rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-950">
+                {/* Category toggle */}
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <div className="flex gap-2">
                     <button
                       onClick={() => setCategory("field")}
-                      className={`px-4 py-2 rounded-2xl font-bold ${
+                      className={`px-4 py-2 rounded-2xl text-sm font-bold transition ${
                         category === "field"
-                          ? "bg-slate-900 text-white"
-                          : "bg-slate-200 text-slate-700"
+                          ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                       }`}
                     >
                       Field Services
                     </button>
-
                     <button
                       onClick={() => setCategory("digital")}
-                      className={`px-4 py-2 rounded-2xl font-bold ${
+                      className={`px-4 py-2 rounded-2xl text-sm font-bold transition ${
                         category === "digital"
-                          ? "bg-slate-900 text-white"
-                          : "bg-slate-200 text-slate-700"
+                          ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                       }`}
                     >
                       Digital Services
                     </button>
                   </div>
-                  <p className="text-sm font-black text-slate-900 dark:text-white">
-                    Search Filters
-                  </p>
-
                   <button
                     onClick={() => {
                       setSkills("");
@@ -9822,21 +9974,21 @@ export default function SearchPage() {
                       setFreelancers([]);
                       searchNearby();
                     }}
-                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5"
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5 transition"
                   >
-                    <RefreshCcw size={16} />
+                    <RefreshCcw size={14} />
                     Reset
                   </button>
                 </div>
 
-                <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-2">
                   {/* Skills */}
                   <div className="sm:col-span-2">
                     <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
                       Skills / Service
                     </label>
                     <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:border-blue-500 dark:border-white/10 dark:bg-slate-900">
-                      <Search size={18} className="text-slate-400" />
+                      <Search size={16} className="text-slate-400 shrink-0" />
                       <input
                         type="text"
                         placeholder="electrician, plumber, developer..."
@@ -9872,14 +10024,11 @@ export default function SearchPage() {
                     <label className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-slate-400">
                       Sort by
                     </label>
-
                     <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-white/10 dark:bg-slate-900">
-                      <ArrowDownUp size={18} className="text-slate-400" />
+                      <ArrowDownUp size={16} className="text-slate-400 shrink-0" />
                       <select
                         value={sortMode}
-                        onChange={(e) =>
-                          setSortMode(e.target.value as SortMode)
-                        }
+                        onChange={(e) => setSortMode(e.target.value as SortMode)}
                         className="w-full bg-transparent text-sm font-black text-slate-900 outline-none dark:text-white"
                       >
                         <option value="nearest">Nearest</option>
@@ -9897,9 +10046,9 @@ export default function SearchPage() {
                         setCoords(null);
                         await searchNearby();
                       }}
-                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950 dark:text-white dark:hover:bg-white/5"
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950 dark:text-white dark:hover:bg-white/5 transition"
                     >
-                      <LocateFixed size={18} className="text-slate-400" />
+                      <LocateFixed size={16} className="text-slate-400" />
                       Refresh GPS
                     </button>
                   </div>
@@ -9908,9 +10057,9 @@ export default function SearchPage() {
                   <div className="sm:col-span-2">
                     <button
                       onClick={searchNearby}
-                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-4 text-sm font-black text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900"
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-4 text-sm font-black text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900 transition"
                     >
-                      <SlidersHorizontal size={18} />
+                      <SlidersHorizontal size={16} />
                       Search Freelancers
                     </button>
                   </div>
@@ -9933,10 +10082,14 @@ export default function SearchPage() {
                     freelancers={freelancers}
                   />
                 ) : (
-                  <div className="h-[650px] ...">Fetching GPS…</div>
+                  <div className="h-[500px] w-full rounded-3xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-slate-900 flex items-center justify-center text-sm font-bold text-slate-400 gap-2">
+                    <LocateFixed size={18} className="animate-pulse" />
+                    Fetching GPS…
+                  </div>
                 )
               ) : (
-                <div className="h-[650px] w-full rounded-3xl border border-slate-200 bg-white shadow-sm flex items-center justify-center text-sm font-bold text-slate-500">
+                <div className="h-[500px] w-full rounded-3xl border border-slate-200 bg-white dark:border-white/10 dark:bg-slate-900 shadow-sm flex flex-col items-center justify-center gap-3 text-sm font-bold text-slate-500">
+                  <Globe size={32} className="text-slate-300" />
                   Digital services do not use location.
                 </div>
               )}
@@ -9945,8 +10098,8 @@ export default function SearchPage() {
         </div>
 
         {/* RESULTS */}
-        <div className="relative border-t border-slate-200 px-6 py-8 dark:border-white/10">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative border-t border-slate-200 px-5 py-8 sm:px-8 dark:border-white/10">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-5">
             <div>
               <p className="text-sm font-black text-slate-900 dark:text-white">
                 Results{" "}
@@ -9960,23 +10113,22 @@ export default function SearchPage() {
             </div>
           </div>
 
-          {/* Skeleton loader */}
           {loading ? (
-            <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {Array.from({ length: 6 }).map((_, i) => (
                 <SkeletonCard key={i} />
               ))}
             </div>
           ) : (
             <>
-              <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 {freelancers.map((f) => (
                   <FreelancerCard key={f._id} freelancer={f} />
                 ))}
               </div>
 
               {!error && freelancers.length === 0 && (
-                <div className="mt-10 rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm dark:border-white/10 dark:bg-slate-950">
+                <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm dark:border-white/10 dark:bg-slate-950">
                   <p className="text-lg font-black text-slate-900 dark:text-white">
                     No freelancers found
                   </p>
@@ -10010,6 +10162,28 @@ export default function SearchPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Fix: Globe icon was referenced but not imported in the original file's digital section
+function Globe({ size, className }: { size: number; className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+      <path d="M2 12h20" />
+    </svg>
   );
 }
 
@@ -10290,6 +10464,7 @@ import { X, Send, Loader2, ImagePlus, Trash2 } from "lucide-react";
 import socket from "@/services/socket";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
+
 interface Message {
   _id: string;
   senderId: string;
@@ -10299,12 +10474,14 @@ interface Message {
   deleted?: boolean;
   createdAt: string;
 }
+
 interface Props {
   freelancerId: string;
   freelancerName: string;
   freelancerAvatar?: string;
   onClose: () => void;
 }
+
 function timeLabel(dateStr: string) {
   const d = new Date(dateStr);
   const now = new Date();
@@ -10316,6 +10493,7 @@ function timeLabel(dateStr: string) {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
+
 export default function ChatWindow({
   freelancerId,
   freelancerName,
@@ -10330,10 +10508,12 @@ export default function ChatWindow({
   const [error, setError] = useState("");
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState("");
+  // ✅ hoveredMsg now works for both mouse hover AND tap-to-reveal on touch
   const [hoveredMsg, setHoveredMsg] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Load message history
   useEffect(() => {
     if (!freelancerId) return;
@@ -10344,11 +10524,14 @@ export default function ChatWindow({
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [freelancerId]);
+
   // Scroll to bottom
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
   const userId = user?._id;
+
   // Socket listener for incoming messages
   useEffect(() => {
     if (!userId) return;
@@ -10370,6 +10553,7 @@ export default function ChatWindow({
       socket.off("new_message", handler);
     };
   }, [userId, freelancerId]);
+
   // Socket listener for deleted messages
   useEffect(() => {
     if (!userId) return;
@@ -10387,7 +10571,15 @@ export default function ChatWindow({
       socket.off("message_deleted", handler);
     };
   }, [userId]);
-  // Handle image selection
+
+  // Tapping anywhere outside a message bubble dismisses the delete button
+  useEffect(() => {
+    if (!hoveredMsg) return;
+    const dismiss = () => setHoveredMsg(null);
+    document.addEventListener("touchstart", dismiss, { passive: true });
+    return () => document.removeEventListener("touchstart", dismiss);
+  }, [hoveredMsg]);
+
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -10403,11 +10595,13 @@ export default function ChatWindow({
     setImagePreview(URL.createObjectURL(file));
     setError("");
   };
+
   const clearImage = () => {
     setSelectedImage(null);
     setImagePreview("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
   const handleSend = async () => {
     const trimmed = text.trim();
     if ((!trimmed && !selectedImage) || sending || !userId) return;
@@ -10435,7 +10629,9 @@ export default function ChatWindow({
       setSending(false);
     }
   };
+
   const handleDelete = async (messageId: string) => {
+    setHoveredMsg(null);
     try {
       await api.delete(`/message/${messageId}`);
       setMessages((prev) =>
@@ -10450,12 +10646,14 @@ export default function ChatWindow({
       setError(err?.response?.data?.msg || "Failed to delete");
     }
   };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
+
   return (
     <>
       {/* Lightbox */}
@@ -10477,12 +10675,13 @@ export default function ChatWindow({
           />
         </div>
       )}
+
       <div
-        className="fixed bottom-24 right-6 z-50 w-80 sm:w-96 rounded-3xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden dark:bg-slate-950 dark:border-slate-800"
-        style={{ maxHeight: "520px" }}
+        className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+76px)] lg:bottom-24 right-4 lg:right-6 z-50 w-[calc(100vw-2rem)] max-w-sm sm:max-w-96 rounded-3xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden dark:bg-slate-950 dark:border-slate-800"
+        style={{ maxHeight: "min(520px, 70dvh)" }}
       >
         {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-4 border-b dark:border-slate-800 bg-slate-900 dark:bg-slate-800">
+        <div className="flex items-center gap-3 px-5 py-4 border-b dark:border-slate-800 bg-slate-900 dark:bg-slate-800 flex-shrink-0">
           <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center text-white font-black text-sm flex-shrink-0">
             {freelancerName?.slice(0, 1).toUpperCase() ?? "?"}
           </div>
@@ -10499,6 +10698,7 @@ export default function ChatWindow({
             <X size={16} />
           </button>
         </div>
+
         {/* Messages */}
         <div
           className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
@@ -10530,12 +10730,22 @@ export default function ChatWindow({
                   </div>
                 );
               }
+
+              const deleteVisible = isMine && hoveredMsg === m._id;
+
               return (
                 <div
                   key={m._id}
                   className={`flex ${isMine ? "justify-end" : "justify-start"} group`}
-                  onMouseEnter={() => setHoveredMsg(m._id)}
-                  onMouseLeave={() => setHoveredMsg(null)}
+                  // Desktop: show delete on hover
+                  onMouseEnter={() => isMine && setHoveredMsg(m._id)}
+                  onMouseLeave={() => isMine && setHoveredMsg(null)}
+                  // ✅ Mobile: tap the bubble to toggle delete button
+                  onTouchStart={(e) => {
+                    if (!isMine) return;
+                    e.stopPropagation(); // prevent the dismiss listener from firing
+                    setHoveredMsg((prev) => (prev === m._id ? null : m._id));
+                  }}
                 >
                   <div className="relative max-w-[75%]">
                     <div
@@ -10562,14 +10772,18 @@ export default function ChatWindow({
                         {timeLabel(m.createdAt)}
                       </p>
                     </div>
-                    {/* Delete button — only for own messages */}
-                    {isMine && hoveredMsg === m._id && (
+
+                    {/* ✅ Delete button — visible on hover (desktop) or tap (mobile) */}
+                    {deleteVisible && (
                       <button
-                        onClick={() => handleDelete(m._id)}
-                        className="absolute -left-8 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center rounded-full bg-red-100 text-red-500 hover:bg-red-200 transition dark:bg-red-900/30 dark:text-red-400"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(m._id);
+                        }}
+                        className="absolute -left-9 top-1/2 -translate-y-1/2 h-7 w-7 flex items-center justify-center rounded-full bg-red-100 text-red-500 hover:bg-red-200 transition dark:bg-red-900/30 dark:text-red-400 shadow-sm"
                         title="Delete message"
                       >
-                        <Trash2 size={12} />
+                        <Trash2 size={13} />
                       </button>
                     )}
                   </div>
@@ -10579,15 +10793,17 @@ export default function ChatWindow({
           )}
           <div ref={bottomRef} />
         </div>
+
         {/* Error */}
         {error && (
-          <div className="px-4 py-2 text-xs font-bold text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400">
+          <div className="px-4 py-2 text-xs font-bold text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400 flex-shrink-0">
             {error}
           </div>
         )}
+
         {/* Image Preview */}
         {imagePreview && (
-          <div className="px-4 py-2 border-t dark:border-slate-800">
+          <div className="px-4 py-2 border-t dark:border-slate-800 flex-shrink-0">
             <div className="relative inline-block">
               <img
                 src={imagePreview}
@@ -10603,9 +10819,9 @@ export default function ChatWindow({
             </div>
           </div>
         )}
+
         {/* Input */}
-        <div className="px-4 py-3 border-t dark:border-slate-800 flex items-end gap-2">
-          {/* Hidden file input */}
+        <div className="px-4 py-3 border-t dark:border-slate-800 flex items-end gap-2 flex-shrink-0">
           <input
             type="file"
             ref={fileInputRef}
@@ -10613,7 +10829,6 @@ export default function ChatWindow({
             className="hidden"
             onChange={handleImageSelect}
           />
-          {/* Attachment button */}
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={sending}
@@ -10676,6 +10891,7 @@ import {
   Megaphone,
   CheckCheck,
   X,
+  LogIn,
 } from "lucide-react";
 
 // ── Notification helpers ──────────────────────────────────────────
@@ -10702,99 +10918,174 @@ const NOTIF_STYLES: Record<
   booking_created: {
     icon: <CalendarCheck2 size={15} />,
     accent: "text-blue-600",
-    bg: "bg-blue-50 dark:bg-blue-950/30",
+    bg: "bg-blue-50",
   },
   booking_confirmed: {
     icon: <CalendarCheck2 size={15} />,
     accent: "text-emerald-600",
-    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    bg: "bg-emerald-50",
   },
   booking_completed: {
     icon: <CalendarCheck2 size={15} />,
     accent: "text-emerald-600",
-    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    bg: "bg-emerald-50",
   },
   booking_cancelled: {
     icon: <CalendarCheck2 size={15} />,
     accent: "text-red-500",
-    bg: "bg-red-50 dark:bg-red-950/20",
+    bg: "bg-red-50",
   },
   dispute_created: {
     icon: <ShieldAlert size={15} />,
     accent: "text-amber-600",
-    bg: "bg-amber-50 dark:bg-amber-950/30",
+    bg: "bg-amber-50",
   },
   dispute_resolved: {
     icon: <ShieldAlert size={15} />,
     accent: "text-emerald-600",
-    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    bg: "bg-emerald-50",
   },
   password_reset: {
     icon: <KeyRound size={15} />,
     accent: "text-slate-600",
-    bg: "bg-slate-50 dark:bg-slate-800/40",
+    bg: "bg-slate-50",
   },
   admin_message: {
     icon: <Megaphone size={15} />,
     accent: "text-purple-600",
-    bg: "bg-purple-50 dark:bg-purple-950/30",
+    bg: "bg-purple-50",
   },
   payment_released: {
     icon: <CreditCard size={15} />,
     accent: "text-emerald-600",
-    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    bg: "bg-emerald-50",
   },
   review_received: {
     icon: <Bell size={15} />,
     accent: "text-blue-500",
-    bg: "bg-blue-50 dark:bg-blue-950/30",
+    bg: "bg-blue-50",
   },
 };
-
 const DEFAULT_STYLE = {
   icon: <Bell size={15} />,
   accent: "text-slate-500",
-  bg: "bg-slate-50 dark:bg-slate-800/40",
+  bg: "bg-slate-50",
 };
-
 function getStyle(type: string) {
   return NOTIF_STYLES[type] ?? DEFAULT_STYLE;
 }
 
-// ── NavLink ───────────────────────────────────────────────────────
+// ── Shared notification list (desktop + mobile) ───────────────────
 
-function NavLink({
-  href,
-  label,
-  icon,
-  onClick,
+function NotifList({
+  notifications,
+  unread,
+  markingAll,
+  onMarkAllRead,
+  onMarkAsRead,
+  onClose,
 }: {
-  href: string;
-  label: string;
-  icon: React.ReactNode;
-  onClick?: () => void;
+  notifications: any[];
+  unread: number;
+  markingAll: boolean;
+  onMarkAllRead: () => void;
+  onMarkAsRead: (n: any) => void;
+  onClose: () => void;
 }) {
-  const pathname = usePathname();
-  const active = pathname === href || pathname.startsWith(href + "/");
-
   return (
-    <Link
-      href={href}
-      onClick={onClick}
-      className={[
-        "flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-extrabold transition",
-        active
-          ? "bg-slate-900 text-white shadow dark:bg-white dark:text-slate-900"
-          : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900",
-      ].join(" ")}
-    >
-      {icon}
-      {label}
-    </Link>
+    // ✅ flex-col so sticky header + scrollable list work together
+    <div className="flex flex-col">
+      {/* ✅ sticky top-0 ensures "Mark all read" is always visible even when list is scrolled */}
+      <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-white">
+        <div>
+          <p className="font-black text-slate-900">Notifications</p>
+          <p className="text-xs font-bold text-slate-400 mt-0.5">
+            {unread > 0 ? `${unread} unread` : "All caught up"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {unread > 0 && (
+            <button
+              type="button"
+              onClick={onMarkAllRead}
+              disabled={markingAll}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200 transition disabled:opacity-50 active:scale-95"
+            >
+              <CheckCheck size={13} /> Mark all read
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 transition"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      </div>
+
+      {/* ✅ Scrollable list — capped so it never overflows viewport */}
+      <div className="overflow-y-auto overscroll-contain max-h-[min(380px,50dvh)]">
+        {notifications.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 gap-3">
+            <div className="h-10 w-10 rounded-full bg-slate-100 flex items-center justify-center">
+              <Bell size={18} className="text-slate-400" />
+            </div>
+            <p className="text-sm font-bold text-slate-500">
+              No notifications yet
+            </p>
+          </div>
+        ) : (
+          notifications.map((n) => {
+            const style = getStyle(n.type);
+            return (
+              <button
+                key={n._id}
+                type="button"
+                onClick={() => onMarkAsRead(n)}
+                className={[
+                  "w-full flex items-start gap-3 px-5 py-4 border-b last:border-0 text-left transition active:bg-slate-100",
+                  "hover:bg-slate-50 border-slate-100",
+                  !n.read ? "bg-blue-50/60" : "",
+                ].join(" ")}
+              >
+                <div
+                  className={[
+                    "mt-0.5 flex-shrink-0 h-8 w-8 rounded-xl flex items-center justify-center",
+                    style.bg,
+                    style.accent,
+                  ].join(" ")}
+                >
+                  {style.icon}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p
+                    className={[
+                      "text-sm leading-snug break-words",
+                      !n.read
+                        ? "font-bold text-slate-900"
+                        : "font-medium text-slate-600",
+                    ].join(" ")}
+                  >
+                    {n.message}
+                  </p>
+                  <p className="text-[11px] font-bold text-slate-400 mt-1">
+                    {timeAgo(n.createdAt)}
+                  </p>
+                </div>
+                {!n.read && (
+                  <div className="mt-1.5 flex-shrink-0 h-2 w-2 rounded-full bg-blue-500" />
+                )}
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }
 
-// ── Main component ────────────────────────────────────────────────
+// ── Main DashboardHeader ──────────────────────────────────────────
 
 export default function DashboardHeader() {
   const { user, logout } = useUser();
@@ -10803,39 +11094,59 @@ export default function DashboardHeader() {
 
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unread, setUnread] = useState(0);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [search, setSearch] = useState("");
   const [markingAll, setMarkingAll] = useState(false);
+  const [search, setSearch] = useState("");
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const notifRef = useRef<HTMLDivElement>(null);
+  const [desktopMenuOpen, setDesktopMenuOpen] = useState(false);
+  const [desktopNotifOpen, setDesktopNotifOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileNotifOpen, setMobileNotifOpen] = useState(false);
 
-  // ── Close dropdowns on outside click ─────────────────────────
+  const desktopMenuRef = useRef<HTMLDivElement>(null);
+  const desktopNotifRef = useRef<HTMLDivElement>(null);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const mobileNotifRef = useRef<HTMLDivElement>(null);
+
+  // ── Close dropdowns on outside click OR outside touch ────────────
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(e.target as Node)
-      )
-        setMenuOpen(false);
-      if (notifRef.current && !notifRef.current.contains(e.target as Node))
-        setShowNotifications(false);
+    const handler = (e: MouseEvent | TouchEvent) => {
+      const target =
+        e.type === "touchstart"
+          ? document.elementFromPoint(
+              (e as TouchEvent).touches[0].clientX,
+              (e as TouchEvent).touches[0].clientY,
+            )
+          : (e as MouseEvent).target;
+      const t = target as Node;
+      if (desktopMenuRef.current && !desktopMenuRef.current.contains(t))
+        setDesktopMenuOpen(false);
+      if (desktopNotifRef.current && !desktopNotifRef.current.contains(t))
+        setDesktopNotifOpen(false);
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(t))
+        setMobileMenuOpen(false);
+      if (mobileNotifRef.current && !mobileNotifRef.current.contains(t))
+        setMobileNotifOpen(false);
     };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
   }, []);
 
-  // ── Close on route change ─────────────────────────────────────
+  // ── Close all on route change ─────────────────────────────────
   useEffect(() => {
-    setMenuOpen(false);
-    setShowNotifications(false);
+    setDesktopMenuOpen(false);
+    setDesktopNotifOpen(false);
+    setMobileMenuOpen(false);
+    setMobileNotifOpen(false);
   }, [pathname]);
 
-  // ✅ user?._id (string) not user (object) — object ref changes every render
   const userId = user?._id ?? null;
+  const userRole = user?.role ?? null;
 
-  // ── Fetch notifications on mount ─────────────────────────────
+  // ── Fetch notifications ───────────────────────────────────────
   useEffect(() => {
     if (!userId) return;
     api
@@ -10847,25 +11158,21 @@ export default function DashboardHeader() {
       .catch(() => {});
   }, [userId]);
 
-  // ── Socket: real-time new notifications ──────────────────────
+  // ── Socket real-time ──────────────────────────────────────────
   useEffect(() => {
     if (!userId) return;
-
     socket.emit("join", userId);
-
     const handler = (data: any) => {
       setNotifications((prev) => [data, ...prev]);
       setUnread((n) => n + 1);
     };
-
     socket.on("notification", handler);
     return () => {
       socket.off("notification", handler);
     };
   }, [userId]);
 
-  // ── Actions ───────────────────────────────────────────────────
-
+  // ── Notification actions ──────────────────────────────────────
   const markAsRead = async (notification: any) => {
     try {
       if (!notification.read) {
@@ -10877,8 +11184,9 @@ export default function DashboardHeader() {
         );
         setUnread((n) => Math.max(0, n - 1));
       }
+      setDesktopNotifOpen(false);
+      setMobileNotifOpen(false);
       if (notification.link) router.push(notification.link);
-      setShowNotifications(false);
     } catch {}
   };
 
@@ -10894,16 +11202,25 @@ export default function DashboardHeader() {
     }
   };
 
+  const closeAllMenus = () => {
+    setDesktopMenuOpen(false);
+    setDesktopNotifOpen(false);
+    setMobileMenuOpen(false);
+    setMobileNotifOpen(false);
+  };
+
   const handleLogout = async () => {
-    setMenuOpen(false);
-    await logout();
-    router.replace("/login");
+    closeAllMenus();
+    try {
+      await logout();
+    } catch {}
+    window.location.href = "/login";
   };
 
   const handleSwitchRole = async () => {
+    closeAllMenus();
     try {
-      setMenuOpen(false);
-      const newRole = user?.role === "client" ? "freelancer" : "client";
+      const newRole = userRole === "client" ? "freelancer" : "client";
       await api.post("/auth/switch-role", { role: newRole });
       window.location.href = "/dashboard";
     } catch {
@@ -10911,29 +11228,25 @@ export default function DashboardHeader() {
     }
   };
 
-  const goToProfile = () => {
-    setMenuOpen(false);
-    if (user?.role === "freelancer") router.push("/freelancer/profile");
-    else if (user?.role === "client") router.push("/client/profile");
-    else router.push("/dashboard");
+  const nav = (href: string) => {
+    closeAllMenus();
+    window.location.href = href;
   };
 
   const handleSearch = () => {
     const q = search.trim();
     if (!q) return;
-    if (user?.role === "client")
-      router.push(`/search?skills=${encodeURIComponent(q)}`);
-    else router.push(`/bookings?q=${encodeURIComponent(q)}`);
+    router.push(
+      userRole === "client"
+        ? `/search?skills=${encodeURIComponent(q)}`
+        : `/bookings?q=${encodeURIComponent(q)}`,
+    );
   };
 
   // ── Nav links per role ────────────────────────────────────────
-  // ✅ FIX: "Messages" link removed from both freelancer and client nav
-
-  const userRole = user?.role ?? null;
-
   const links = useMemo(() => {
     if (!userRole) return [];
-    if (userRole === "admin") {
+    if (userRole === "admin")
       return [
         {
           label: "Admin Panel",
@@ -10941,8 +11254,7 @@ export default function DashboardHeader() {
           icon: <LayoutDashboard size={18} />,
         },
       ];
-    }
-    if (userRole === "freelancer") {
+    if (userRole === "freelancer")
       return [
         {
           label: "Dashboard",
@@ -10950,9 +11262,9 @@ export default function DashboardHeader() {
           icon: <LayoutDashboard size={18} />,
         },
         {
-          label: "My Profile",
+          label: "Profile",
           href: "/freelancer/profile",
-          icon: <Briefcase size={18} />,
+          icon: <UserIcon size={18} />,
         },
         {
           label: "Calendar",
@@ -10964,9 +11276,7 @@ export default function DashboardHeader() {
           href: "/freelancer/bookings",
           icon: <Briefcase size={18} />,
         },
-        // ✅ Messages link removed intentionally
       ];
-    }
     return [
       {
         label: "Dashboard",
@@ -10979,253 +11289,361 @@ export default function DashboardHeader() {
         href: "/bookings",
         icon: <CalendarDays size={18} />,
       },
-      // ✅ Messages link removed intentionally
     ];
   }, [userRole]);
 
-  if (!user) return null;
+  // ── Shared dropdown menu items ────────────────────────────────
+  const DropdownItems = () => (
+    <div className="py-1">
+      <button
+        type="button"
+        onClick={() => nav(userRole === "admin" ? "/admin" : "/dashboard")}
+        className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 transition active:bg-slate-100"
+      >
+        <LayoutDashboard size={16} className="text-slate-400 shrink-0" />{" "}
+        Dashboard
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          nav(
+            userRole === "freelancer"
+              ? "/freelancer/profile"
+              : userRole === "client"
+                ? "/client/profile"
+                : "/dashboard",
+          )
+        }
+        className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 transition active:bg-slate-100"
+      >
+        <UserIcon size={16} className="text-slate-400 shrink-0" /> My Profile
+      </button>
+      {userRole === "freelancer" && (
+        <button
+          type="button"
+          onClick={() => nav("/calendar")}
+          className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 transition active:bg-slate-100"
+        >
+          <CalendarDays size={16} className="text-slate-400 shrink-0" />{" "}
+          Calendar
+        </button>
+      )}
+      {userRole !== "admin" && (
+        <button
+          type="button"
+          onClick={handleSwitchRole}
+          className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 transition active:bg-slate-100"
+        >
+          <Repeat size={16} className="text-slate-400 shrink-0" /> Switch Role
+        </button>
+      )}
+      <div className="my-1 h-px bg-slate-100" />
+      <button
+        type="button"
+        onClick={handleLogout}
+        className="flex w-full items-center gap-3 px-4 py-3 text-sm font-black text-red-600 hover:bg-red-50 transition active:bg-red-100"
+      >
+        <LogOut size={16} className="shrink-0" /> Logout
+      </button>
+    </div>
+  );
 
-  return (
-    <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-950/80 backdrop-blur border-b border-slate-200 dark:border-white/10">
-      <div className="w-full px-4 sm:px-6 lg:px-12 py-4 flex items-center justify-between gap-4">
-        {/* Brand */}
-        <Link href="/" className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black dark:bg-white dark:text-slate-900">
-            P
-          </div>
-          <div className="leading-tight">
-            <p className="font-black text-slate-900 dark:text-white">
+  // ── Not logged in: minimal header ─────────────────────────────
+  if (!user) {
+    return (
+      <header
+        className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200"
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+      >
+        <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm">
+              P
+            </div>
+            <p className="font-black text-slate-900 hidden sm:block">
               PocketLancer
             </p>
-            <p className="text-xs font-bold text-slate-500 capitalize dark:text-slate-400">
-              {user.role} dashboard
-            </p>
+          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/login"
+              className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 transition"
+            >
+              <LogIn size={15} /> Login
+            </Link>
+            <Link
+              href="/register"
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-800 transition"
+            >
+              Join Now
+            </Link>
           </div>
-        </Link>
-
-        {/* Desktop nav */}
-        <nav className="hidden lg:flex items-center gap-2">
-          {links.map((l) => (
-            <NavLink key={l.href} href={l.href} label={l.label} icon={l.icon} />
-          ))}
-        </nav>
-
-        {/* Search bar */}
-        <div className="hidden xl:flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm dark:bg-slate-900 dark:border-slate-800">
-          <SearchIcon
-            size={18}
-            className="text-slate-500 dark:text-slate-300"
-          />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder={
-              user.role === "client"
-                ? "Search skills (ex: electrician)..."
-                : "Search bookings..."
-            }
-            className="w-72 bg-transparent outline-none text-sm font-bold text-slate-800 placeholder:text-slate-400 dark:text-white"
-          />
-          <button
-            onClick={handleSearch}
-            className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900"
-          >
-            Search
-          </button>
         </div>
+      </header>
+    );
+  }
 
-        {/* Right controls */}
-        <div className="flex items-center gap-3">
-          {/* ── Notifications ── */}
-          <div className="relative" ref={notifRef}>
+  return (
+    <>
+      {/* ══ Top Header ══════════════════════════════════════════════ */}
+      <header
+        className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200"
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+      >
+        <div className="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
+          {/* Brand */}
+          <Link href="/" className="flex items-center gap-2.5 shrink-0">
+            <div className="h-9 w-9 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm">
+              P
+            </div>
+            <div className="hidden sm:block leading-tight">
+              <p className="font-black text-slate-900 text-sm">PocketLancer</p>
+              <p className="text-[10px] font-bold text-slate-500 capitalize">
+                {user.role} dashboard
+              </p>
+            </div>
+          </Link>
+
+          {/* Desktop nav — lg+ */}
+          <nav className="hidden lg:flex items-center gap-1 flex-1 justify-center">
+            {links.map((l) => {
+              const active =
+                pathname === l.href || pathname.startsWith(l.href + "/");
+              return (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className={[
+                    "flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition",
+                    active
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+                  ].join(" ")}
+                >
+                  {l.icon} {l.label}
+                </Link>
+              );
+            })}
+          </nav>
+
+          {/* Search — xl+ */}
+          <div className="hidden xl:flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 focus-within:ring-2 focus-within:ring-slate-300">
+            <SearchIcon size={15} className="text-slate-400 shrink-0" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              placeholder={
+                userRole === "client" ? "Search skills…" : "Search bookings…"
+              }
+              className="w-48 bg-transparent outline-none text-sm font-bold text-slate-900 placeholder:text-slate-400"
+            />
             <button
-              onClick={() => setShowNotifications((s) => !s)}
-              className="relative rounded-xl border border-slate-200 p-2.5 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900 transition"
-              title="Notifications"
+              onClick={handleSearch}
+              className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-700 transition shrink-0"
             >
-              <Bell size={18} className="text-slate-700 dark:text-white" />
-              {unread > 0 && (
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 leading-none">
-                  {unread > 9 ? "9+" : unread}
-                </span>
-              )}
+              Search
             </button>
-
-            {showNotifications && (
-              <div className="absolute right-0 mt-3 w-96 rounded-2xl border bg-white shadow-2xl z-50 dark:bg-slate-950 dark:border-slate-800 overflow-hidden">
-                {/* Panel header */}
-                <div className="flex items-center justify-between px-5 py-4 border-b dark:border-slate-800">
-                  <div>
-                    <p className="font-black text-slate-900 dark:text-white">
-                      Notifications
-                    </p>
-                    <p className="text-xs font-bold text-slate-400 mt-0.5">
-                      {unread > 0 ? `${unread} unread` : "All caught up"}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {unread > 0 && (
-                      <button
-                        onClick={markAllRead}
-                        disabled={markingAll}
-                        className="flex items-center gap-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 px-3 py-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition disabled:opacity-50"
-                        title="Mark all as read"
-                      >
-                        <CheckCheck size={13} />
-                        Mark all read
-                      </button>
-                    )}
-                    <button
-                      onClick={() => setShowNotifications(false)}
-                      className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Notification list */}
-                <div className="max-h-[400px] overflow-y-auto">
-                  {notifications.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-12 gap-3">
-                      <div className="h-12 w-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-                        <Bell size={20} className="text-slate-400" />
-                      </div>
-                      <p className="text-sm font-bold text-slate-500 dark:text-slate-400">
-                        No notifications yet
-                      </p>
-                    </div>
-                  ) : (
-                    notifications.map((n) => {
-                      const style = getStyle(n.type);
-                      return (
-                        <button
-                          key={n._id}
-                          onClick={() => markAsRead(n)}
-                          className={[
-                            "w-full flex items-start gap-3 px-5 py-4 border-b last:border-0 text-left transition",
-                            "hover:bg-slate-50 dark:hover:bg-slate-900/60 dark:border-slate-800/60",
-                            !n.read ? "bg-blue-50/60 dark:bg-blue-950/20" : "",
-                          ].join(" ")}
-                        >
-                          <div
-                            className={[
-                              "mt-0.5 flex-shrink-0 h-8 w-8 rounded-xl flex items-center justify-center",
-                              style.bg,
-                              style.accent,
-                            ].join(" ")}
-                          >
-                            {style.icon}
-                          </div>
-
-                          <div className="flex-1 min-w-0">
-                            <p
-                              className={[
-                                "text-sm leading-snug break-words",
-                                !n.read
-                                  ? "font-bold text-slate-900 dark:text-white"
-                                  : "font-medium text-slate-600 dark:text-slate-300",
-                              ].join(" ")}
-                            >
-                              {n.message}
-                            </p>
-                            <p className="text-[11px] font-bold text-slate-400 mt-1">
-                              {timeAgo(n.createdAt)}
-                            </p>
-                          </div>
-
-                          {!n.read && (
-                            <div className="mt-1.5 flex-shrink-0 h-2 w-2 rounded-full bg-blue-500" />
-                          )}
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* ── User dropdown ── */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setMenuOpen((s) => !s)}
-              className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 shadow-sm hover:bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:hover:bg-slate-900"
-            >
-              <span className="h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center font-black text-xs dark:bg-white dark:text-slate-900">
-                {(user.name || "U").slice(0, 1).toUpperCase()}
-              </span>
-              <div className="hidden sm:block text-left leading-tight">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-black text-slate-900 dark:text-white">
-                    {user.name}
-                  </p>
-                  <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                    {user.role}
+          {/* Right controls */}
+          <div className="flex items-center gap-2">
+            {/* Notifications — desktop lg+ */}
+            <div className="relative hidden lg:block" ref={desktopNotifRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  setDesktopNotifOpen((s) => !s);
+                  setDesktopMenuOpen(false);
+                }}
+                className="relative rounded-xl border border-slate-200 p-2.5 text-slate-600 hover:bg-slate-100 transition"
+              >
+                <Bell size={17} />
+                {unread > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
+                    {unread > 9 ? "9+" : unread}
                   </span>
+                )}
+              </button>
+              {desktopNotifOpen && (
+                <div className="absolute right-0 mt-2 w-[min(calc(100vw-2rem),22rem)] rounded-2xl border bg-white shadow-2xl z-50 overflow-hidden">
+                  <NotifList
+                    notifications={notifications}
+                    unread={unread}
+                    markingAll={markingAll}
+                    onMarkAllRead={markAllRead}
+                    onMarkAsRead={markAsRead}
+                    onClose={() => setDesktopNotifOpen(false)}
+                  />
                 </div>
-                <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-                  {user.email}
-                </p>
-              </div>
-              <ChevronDown
-                size={16}
-                className="text-slate-500 dark:text-slate-300"
-              />
+              )}
+            </div>
+
+            {/* User dropdown — desktop */}
+            <div className="relative hidden lg:block" ref={desktopMenuRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  setDesktopMenuOpen((s) => !s);
+                  setDesktopNotifOpen(false);
+                }}
+                className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm hover:bg-slate-50 transition"
+              >
+                <span className="h-7 w-7 rounded-full bg-slate-900 text-white flex items-center justify-center font-black text-xs">
+                  {(user.name || "U")[0].toUpperCase()}
+                </span>
+                <div className="hidden md:block text-left leading-tight">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-xs font-black text-slate-900 max-w-[90px] truncate">
+                      {user.name}
+                    </p>
+                    <span className="rounded-full px-1.5 py-0.5 text-[9px] font-black uppercase bg-slate-100 text-slate-600">
+                      {user.role}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 truncate max-w-[140px]">
+                    {user.email}
+                  </p>
+                </div>
+                <ChevronDown
+                  size={14}
+                  className={`text-slate-400 transition-transform duration-200 ${desktopMenuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {desktopMenuOpen && (
+                <div className="absolute right-0 mt-2 w-56 overflow-hidden rounded-2xl border bg-white shadow-xl z-50">
+                  <DropdownItems />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* ══ Mobile Bottom Navigation ════════════════════════════════ */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-40 lg:hidden border-t border-slate-200 bg-white/98 backdrop-blur-md"
+        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+      >
+        <div className="flex items-stretch justify-around px-1 pt-1 pb-1 max-w-lg mx-auto">
+          {/* Nav links */}
+          {links.map((l) => {
+            const active =
+              pathname === l.href || pathname.startsWith(l.href + "/");
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                className="flex flex-col items-center justify-center gap-0.5 flex-1 min-h-[52px] px-1 py-1.5 rounded-xl"
+              >
+                <span
+                  className={[
+                    "flex items-center justify-center rounded-xl transition-all duration-200",
+                    active
+                      ? "bg-slate-900 text-white px-3 h-7"
+                      : "text-slate-400 w-7 h-7",
+                  ].join(" ")}
+                >
+                  <span className={active ? "scale-90" : ""}>{l.icon}</span>
+                </span>
+                <span
+                  className={`text-[10px] font-black truncate max-w-[56px] text-center leading-none mt-0.5 ${
+                    active ? "text-slate-900" : "text-slate-400"
+                  }`}
+                >
+                  {l.label}
+                </span>
+              </Link>
+            );
+          })}
+
+          {/* Notifications — mobile */}
+          <div className="relative flex-1" ref={mobileNotifRef}>
+            <button
+              type="button"
+              onClick={() => {
+                setMobileNotifOpen((s) => !s);
+                setMobileMenuOpen(false);
+              }}
+              className="flex flex-col items-center justify-center gap-0.5 w-full min-h-[52px] px-1 py-1.5 rounded-xl"
+            >
+              <span
+                className={[
+                  "relative flex items-center justify-center rounded-xl transition-all duration-200",
+                  mobileNotifOpen
+                    ? "bg-slate-900 text-white px-3 h-7"
+                    : "text-slate-400 w-7 h-7",
+                ].join(" ")}
+              >
+                <Bell size={18} />
+                {unread > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-black rounded-full min-w-[13px] h-[13px] flex items-center justify-center px-0.5 border border-white">
+                    {unread > 9 ? "9+" : unread}
+                  </span>
+                )}
+              </span>
+              <span
+                className={`text-[10px] font-black leading-none mt-0.5 ${
+                  mobileNotifOpen ? "text-slate-900" : "text-slate-400"
+                }`}
+              >
+                Alerts
+              </span>
             </button>
 
-            {menuOpen && (
-              <div className="absolute right-0 mt-3 w-56 overflow-hidden rounded-2xl border bg-white shadow-xl z-50 dark:bg-slate-950 dark:border-slate-800">
-                <button
-                  onClick={() => {
-                    setMenuOpen(false);
-                    router.push(
-                      user.role === "admin" ? "/admin" : "/dashboard",
-                    );
-                  }}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
-                >
-                  <LayoutDashboard size={16} /> Dashboard
-                </button>
-                <button
-                  onClick={goToProfile}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
-                >
-                  <UserIcon size={16} /> My Profile
-                </button>
-                {user.role === "freelancer" && (
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      router.push("/calendar");
-                    }}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
-                  >
-                    <CalendarDays size={16} /> Calendar
-                  </button>
-                )}
-                {user.role !== "admin" && (
-                  <button
-                    onClick={handleSwitchRole}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-900 dark:text-white"
-                  >
-                    <Repeat size={16} /> Switch Role
-                  </button>
-                )}
-                <div className="h-px bg-slate-100 dark:bg-slate-800" />
-                <button
-                  onClick={handleLogout}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-sm font-black text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-                >
-                  <LogOut size={16} /> Logout
-                </button>
+            {/* ✅ Fixed position panel — never clips off top of screen */}
+            {mobileNotifOpen && (
+              <div className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+68px)] right-2 w-[min(calc(100vw-1rem),22rem)] rounded-2xl border bg-white shadow-2xl z-50 overflow-hidden">
+                <NotifList
+                  notifications={notifications}
+                  unread={unread}
+                  markingAll={markingAll}
+                  onMarkAllRead={markAllRead}
+                  onMarkAsRead={markAsRead}
+                  onClose={() => setMobileNotifOpen(false)}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Profile / menu — mobile */}
+          <div className="relative flex-1" ref={mobileMenuRef}>
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen((s) => !s);
+                setMobileNotifOpen(false);
+              }}
+              className="flex flex-col items-center justify-center gap-0.5 w-full min-h-[52px] px-1 py-1.5 rounded-xl"
+            >
+              <span
+                className={[
+                  "flex items-center justify-center font-black text-xs transition-all duration-200 rounded-xl",
+                  mobileMenuOpen
+                    ? "bg-slate-900 text-white px-3 h-7"
+                    : "bg-slate-100 text-slate-700 w-7 h-7 rounded-full",
+                ].join(" ")}
+              >
+                {(user.name || "U")[0].toUpperCase()}
+              </span>
+              <span
+                className={`text-[10px] font-black leading-none mt-0.5 truncate max-w-[52px] text-center ${
+                  mobileMenuOpen ? "text-slate-900" : "text-slate-400"
+                }`}
+              >
+                {user.name?.split(" ")[0] || "Me"}
+              </span>
+            </button>
+
+            {mobileMenuOpen && (
+              <div className="absolute bottom-full mb-2 right-0 w-56 overflow-hidden rounded-2xl border bg-white shadow-xl z-50">
+                <DropdownItems />
               </div>
             )}
           </div>
         </div>
-      </div>
-    </header>
+      </nav>
+    </>
   );
 }
 
@@ -11436,22 +11854,86 @@ export default function DisputeModal({
 import Link from "next/link";
 
 export default function Footer() {
-    return (
-        <footer className="bg-gray-800 text-white mt-auto">
-            <div className="container mx-auto px-4 py-8 text-center">
-                <div className="flex flex-col md:flex-row justify-center gap-6 mb-6 text-sm">
-                    <Link href="/terms">Terms</Link>
-                    <Link href="/privacy">Privacy</Link>
-                    <Link href="/freelancer/availability">For Freelancers</Link>
-                </div>
-
-                <p className="text-gray-400 text-sm">
-                    © {new Date().getFullYear()} PocketLancer
-                </p>
+  return (
+    <footer className="border-t border-slate-200 bg-white dark:border-white/10 dark:bg-slate-950">
+      <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-between">
+          {/* Brand */}
+          <div className="flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-xl bg-slate-900 text-white flex items-center justify-center font-black text-sm dark:bg-white dark:text-slate-900">
+              P
             </div>
-        </footer>
-    );
+            <div className="leading-tight">
+              <p className="font-black text-slate-900 dark:text-white text-sm">
+                PocketLancer
+              </p>
+              <p className="text-[10px] font-bold text-slate-500">
+                Hire trusted freelancers
+              </p>
+            </div>
+          </div>
+
+          {/* Links */}
+          <nav className="flex items-center gap-6 text-xs font-bold text-slate-500 dark:text-slate-400">
+            <Link
+              href="/terms"
+              className="hover:text-slate-900 dark:hover:text-white transition"
+            >
+              Terms
+            </Link>
+            <Link
+              href="/privacy"
+              className="hover:text-slate-900 dark:hover:text-white transition"
+            >
+              Privacy
+            </Link>
+            <Link
+              href="/freelancer/availability"
+              className="hover:text-slate-900 dark:hover:text-white transition"
+            >
+              For Freelancers
+            </Link>
+          </nav>
+
+          {/* Copyright */}
+          <p className="text-xs font-bold text-slate-400 dark:text-slate-500">
+            © {new Date().getFullYear()} PocketLancer
+          </p>
+        </div>
+      </div>
+    </footer>
+  );
 }
+
+--- FILE: client/components/FooterWrapper.tsx ---
+"use client";
+
+import { usePathname } from "next/navigation";
+import Footer from "@/components/Footer";
+
+// Show footer only on public-facing pages
+const NO_FOOTER_PREFIXES = [
+  "/dashboard",
+  "/freelancer/profile",
+  "/freelancer/bookings",
+  "/bookings",
+  "/calendar",
+  "/client",
+  "/disputes",
+  "/book",
+  "/payment",
+  "/admin",
+  "/search",
+  "/map-search",
+];
+
+export default function FooterWrapper() {
+  const pathname = usePathname();
+  const hide = NO_FOOTER_PREFIXES.some((p) => pathname?.startsWith(p));
+  if (hide) return null;
+  return <Footer />;
+}
+
 --- FILE: client/components/FreelancerCalendar.tsx ---
 "use client";
 
@@ -11654,6 +12136,9 @@ export default function FreelancerCard({ freelancer }: { freelancer: any }) {
  * 2. Unread count only loaded when user is logged in AND widget is opened
  * 3. No API calls block navigation or page render
  * 4. Badge only increments for RECEIVER, never for SENDER
+ * 5. Conversation delete button always visible on mobile (touch-friendly)
+ * 6. Outside-click handler covers both mouse and touch events
+ * 7. Orphaned conversations (deleted partner) are deletable via conversationId
  */
 import { useEffect, useRef, useState } from "react";
 import { MessageCircle, X, ChevronDown, Trash2 } from "lucide-react";
@@ -11661,6 +12146,7 @@ import socket from "@/services/socket";
 import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
 import ChatWindow from "./ChatWindow";
+
 interface Conversation {
   conversationId: string;
   partner: { _id: string; name: string; profilePic?: string } | null;
@@ -11673,6 +12159,7 @@ interface Conversation {
   };
   unreadCount: number;
 }
+
 export default function FreelancerChatWidget() {
   const { user } = useUser();
   const [open, setOpen] = useState(false);
@@ -11685,8 +12172,8 @@ export default function FreelancerChatWidget() {
   } | null>(null);
   const [loadingConvos, setLoadingConvos] = useState(false);
   const widgetRef = useRef<HTMLDivElement>(null);
+
   // Listen for "open-chat" events dispatched by profile pages
-  // This avoids importing ChatWindow or socket in every page
   useEffect(() => {
     const handler = (e: Event) => {
       const { userId, name, avatar } = (e as CustomEvent).detail;
@@ -11698,21 +12185,21 @@ export default function FreelancerChatWidget() {
     window.addEventListener("open-chat", handler);
     return () => window.removeEventListener("open-chat", handler);
   }, []);
+
   // Load unread count once after login — non-blocking
   useEffect(() => {
     if (!user?._id) return;
-    // ✅ correct path: /message/ not /messages/
     api
       .get("/message/unread/count")
       .then((r) => setTotalUnread(r.data.count || 0))
-      .catch(() => {}); // silently ignore — never crash the app
+      .catch(() => {});
   }, [user?._id]);
+
   // Socket: listen for new messages — only count if WE are the receiver
   const userId = user?._id;
   useEffect(() => {
     if (!userId) return;
     const handler = (msg: any) => {
-      // ✅ Only increment badge for receiver, NEVER for sender
       if (msg.receiverId?.toString() === userId) {
         setTotalUnread((n) => n + 1);
       }
@@ -11722,17 +12209,18 @@ export default function FreelancerChatWidget() {
       socket.off("new_message", handler);
     };
   }, [userId]);
+
   // Load conversations when panel opens
   useEffect(() => {
     if (!open || !user?._id) return;
     setLoadingConvos(true);
-    // ✅ correct path: /message/ not /messages/
     api
       .get("/message/conversations/list")
       .then((r) => setConversations(r.data.conversations || []))
       .catch(() => {})
       .finally(() => setLoadingConvos(false));
   }, [open, user?._id]);
+
   // Listen for conversation_deleted from the other user
   useEffect(() => {
     if (!userId) return;
@@ -11746,18 +12234,28 @@ export default function FreelancerChatWidget() {
       socket.off("conversation_deleted", handler);
     };
   }, [userId]);
+
   const handleDeleteConversation = async (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     conv: Conversation,
   ) => {
-    e.stopPropagation(); // don't open the chat
-    if (!conv.partner) return;
+    e.stopPropagation();
+
+    const partnerName = conv.partner?.name ?? "this conversation";
     const ok = window.confirm(
-      `Delete entire conversation with ${conv.partner.name}? This cannot be undone.`,
+      `Delete entire conversation with ${partnerName}? This cannot be undone.`,
     );
     if (!ok) return;
+
     try {
-      await api.delete(`/message/conversation/${conv.partner._id}`);
+      if (conv.partner) {
+        // Normal case — delete by partner user ID
+        await api.delete(`/message/conversation/${conv.partner._id}`);
+      } else {
+        // Orphaned case — partner account deleted, use raw conversationId
+        await api.delete(`/message/conversation/orphan/${conv.conversationId}`);
+      }
+
       setConversations((prev) =>
         prev.filter((c) => c.conversationId !== conv.conversationId),
       );
@@ -11766,17 +12264,31 @@ export default function FreelancerChatWidget() {
       console.error("Delete conversation error:", err);
     }
   };
-  // Close on outside click
+
+  // Close on outside click AND outside touch
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (widgetRef.current && !widgetRef.current.contains(e.target as Node)) {
+    const handler = (e: MouseEvent | TouchEvent) => {
+      const target =
+        e.type === "touchstart"
+          ? document.elementFromPoint(
+              (e as TouchEvent).touches[0].clientX,
+              (e as TouchEvent).touches[0].clientY,
+            )
+          : (e as MouseEvent).target;
+      if (widgetRef.current && !widgetRef.current.contains(target as Node)) {
         setOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
   }, []);
+
   const handleOpenConversation = (conv: Conversation) => {
+    // Only open chat if partner still exists
     if (!conv.partner) return;
     setActiveChat({
       userId: conv.partner._id,
@@ -11784,7 +12296,6 @@ export default function FreelancerChatWidget() {
       avatar: conv.partner.profilePic,
     });
     setOpen(false);
-    // Reduce badge count
     setConversations((prev) =>
       prev.map((c) =>
         c.conversationId === conv.conversationId ? { ...c, unreadCount: 0 } : c,
@@ -11792,8 +12303,9 @@ export default function FreelancerChatWidget() {
     );
     setTotalUnread((n) => Math.max(0, n - conv.unreadCount));
   };
-  // Don't render anything if user is not logged in
+
   if (!user) return null;
+
   return (
     <>
       {/* Active chat window */}
@@ -11805,25 +12317,27 @@ export default function FreelancerChatWidget() {
           onClose={() => setActiveChat(null)}
         />
       )}
+
       {/* Floating button + panel */}
       <div
         ref={widgetRef}
-        className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3"
+        className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+76px)] lg:bottom-6 right-4 z-50 flex flex-col items-end gap-3"
       >
         {/* Conversations panel */}
         {open && !activeChat && (
           <div className="w-80 rounded-3xl border border-slate-200 bg-white shadow-2xl dark:bg-slate-950 dark:border-slate-800 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b dark:border-slate-800">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
               <p className="font-black text-slate-900 dark:text-white">
                 Messages
               </p>
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
               >
                 <X size={15} />
               </button>
             </div>
+
             <div className="max-h-80 overflow-y-auto">
               {loadingConvos ? (
                 <div className="flex items-center justify-center py-8 text-slate-400 text-sm font-bold">
@@ -11838,47 +12352,68 @@ export default function FreelancerChatWidget() {
                   </p>
                 </div>
               ) : (
-                conversations.map((conv) => (
-                  <div
-                    key={conv.conversationId}
-                    onClick={() => handleOpenConversation(conv)}
-                    className="group w-full flex items-center gap-3 px-5 py-3 border-b last:border-0 hover:bg-slate-50 dark:hover:bg-slate-900 dark:border-slate-800/60 text-left transition cursor-pointer"
-                  >
-                    <div className="h-9 w-9 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center font-black text-sm flex-shrink-0">
-                      {conv.partner?.name?.slice(0, 1).toUpperCase() ?? "?"}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-black text-slate-900 dark:text-white truncate">
-                          {conv.partner?.name ?? "Unknown"}
-                        </p>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {conv.unreadCount > 0 && (
-                            <span className="h-5 min-w-[20px] px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
-                              {conv.unreadCount}
-                            </span>
-                          )}
-                          <button
-                            onClick={(e) => handleDeleteConversation(e, conv)}
-                            className="h-6 w-6 rounded-lg flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 opacity-0 group-hover:opacity-100 transition-all"
-                            title="Delete conversation"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                conversations.map((conv) => {
+                  const isOrphaned = !conv.partner;
+                  return (
+                    <div
+                      key={conv.conversationId}
+                      onClick={() => handleOpenConversation(conv)}
+                      className={[
+                        "group w-full flex items-center gap-3 px-5 py-3 border-b last:border-0",
+                        "dark:border-slate-800/60 text-left transition",
+                        isOrphaned
+                          ? "opacity-50 cursor-default"
+                          : "hover:bg-slate-50 dark:hover:bg-slate-900 cursor-pointer",
+                      ].join(" ")}
+                    >
+                      {/* Avatar */}
+                      <div className="h-9 w-9 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center font-black text-sm flex-shrink-0">
+                        {conv.partner?.name?.slice(0, 1).toUpperCase() ?? "?"}
                       </div>
-                      <p className="text-xs font-bold text-slate-400 truncate mt-0.5">
-                        {conv.lastMessage?.senderId?.toString() === user._id
-                          ? `You: ${conv.lastMessage.text}`
-                          : (conv.lastMessage?.text ?? "")}
-                      </p>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-black text-slate-900 dark:text-white truncate">
+                            {conv.partner?.name ?? "Deleted Account"}
+                          </p>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {conv.unreadCount > 0 && (
+                              <span className="h-5 min-w-[20px] px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
+                                {conv.unreadCount}
+                              </span>
+                            )}
+                            {/* Delete always shown — works for both normal + orphaned */}
+                            <button
+                              onClick={(e) => handleDeleteConversation(e, conv)}
+                              onTouchEnd={(e) =>
+                                handleDeleteConversation(e, conv)
+                              }
+                              className="h-7 w-7 rounded-lg flex items-center justify-center transition-all
+                                text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20
+                                opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                              title="Delete conversation"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs font-bold text-slate-400 truncate mt-0.5">
+                          {isOrphaned
+                            ? "This account no longer exists"
+                            : conv.lastMessage?.senderId?.toString() ===
+                                user._id
+                              ? `You: ${conv.lastMessage.text}`
+                              : (conv.lastMessage?.text ?? "")}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
         )}
+
         {/* FAB */}
         <button
           onClick={() => setOpen((s) => !s)}
@@ -12106,11 +12641,13 @@ export default function GetLocationButton() {
 
 --- FILE: client/components/Header.tsx ---
 // client/components/Header.tsx
+// This is the PUBLIC header — only shown on the "/" homepage by SmartHeader.
+// All other routes use DashboardHeader.
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
 import {
@@ -12123,29 +12660,16 @@ import {
   Shield,
 } from "lucide-react";
 
-/** Honor score badge — reused in dropdown and wherever else needed */
-export function HonorScoreBadge({
-  score,
-  size = "md",
-}: {
-  score: number;
-  size?: "sm" | "md";
-}) {
+export function HonorScoreBadge({ score, size = "md" }: { score: number; size?: "sm" | "md" }) {
   const color =
     score < 35
       ? "bg-red-100 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20"
       : score < 75
         ? "bg-orange-100 text-orange-700 ring-orange-200 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20"
         : "bg-emerald-100 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20";
-
   const label = score < 35 ? "Low Trust" : score < 75 ? "Average" : "Trusted";
-
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full ring-1 font-black ${color} ${
-        size === "sm" ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-0.5 text-[10px]"
-      }`}
-    >
+    <span className={`inline-flex items-center gap-1 rounded-full ring-1 font-black ${color} ${size === "sm" ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-0.5 text-[10px]"}`}>
       <Shield size={size === "sm" ? 8 : 9} />
       {label} · {score}
     </span>
@@ -12155,17 +12679,13 @@ export function HonorScoreBadge({
 export default function Header() {
   const { user, logout } = useUser();
   const router = useRouter();
-  const pathname = usePathname();
 
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const isDashboardRoute = pathname.startsWith("/dashboard");
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -12173,14 +12693,14 @@ export default function Header() {
 
   const handleLogout = async () => {
     setOpen(false);
-    await logout();
-    router.replace("/login");
+    try { await logout(); } catch {}
+    window.location.href = "/login";
   };
 
   const handleSwitchRole = async () => {
+    setOpen(false);
     try {
       if (!user || user.role === "admin") return;
-      setOpen(false);
       const newRole = user.role === "client" ? "freelancer" : "client";
       await api.post("/auth/switch-role", { role: newRole });
       window.location.href = "/dashboard";
@@ -12189,43 +12709,18 @@ export default function Header() {
     }
   };
 
-  const goToDashboard = () => {
-    if (!user) return;
-    router.push(user.role === "admin" ? "/admin" : "/dashboard");
-  };
-
-  const goToProfile = () => {
-    setOpen(false);
-    if (user?.role === "freelancer") router.push("/freelancer/profile");
-    else if (user?.role === "client") router.push("/client/profile");
-    else if (user?.role === "admin") router.push("/admin");
-  };
-
-  // Avatar ring color based on honor score
-  const avatarRing =
-    !user || user.honorScore === undefined
-      ? "ring-slate-300 dark:ring-slate-700"
-      : user.honorScore < 35
-        ? "ring-red-400"
-        : user.honorScore < 75
-          ? "ring-orange-400"
-          : "ring-emerald-400";
+  const goTo = (href: string) => { setOpen(false); window.location.href = href; };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-white/10 dark:bg-slate-950/80">
-      <div className="flex w-full items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-12">
+    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md dark:border-white/10 dark:bg-slate-950/80"
+      style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
+      <div className="max-w-screen-2xl mx-auto flex w-full items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
         {/* Logo */}
-        <Link href="/" className="flex shrink-0 items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-900 font-black text-white dark:bg-white dark:text-slate-900">
-            P
-          </div>
-          <div className="hidden leading-tight xs:block">
-            <p className="font-black text-slate-900 dark:text-white">
-              PocketLancer
-            </p>
-            <p className="text-[10px] font-bold text-slate-500">
-              Hire trusted freelancers
-            </p>
+        <Link href="/" className="flex shrink-0 items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-900 font-black text-sm text-white dark:bg-white dark:text-slate-900">P</div>
+          <div className="hidden leading-tight sm:block">
+            <p className="font-black text-slate-900 dark:text-white">PocketLancer</p>
+            <p className="text-[10px] font-bold text-slate-500">Hire trusted freelancers</p>
           </div>
         </Link>
 
@@ -12233,111 +12728,65 @@ export default function Header() {
         <div className="flex items-center gap-3">
           {!user ? (
             <div className="flex items-center gap-3">
-              <Link
-                href="/login"
-                className="text-sm font-bold text-slate-600 dark:text-slate-300"
-              >
-                Login
-              </Link>
-              <Link
-                href="/register"
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white dark:bg-white dark:text-slate-900"
-              >
-                Join Now
-              </Link>
+              <Link href="/login" className="text-sm font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition">Login</Link>
+              <Link href="/register" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 transition">Join Now</Link>
             </div>
           ) : (
             <>
-              {!isDashboardRoute && (
-                <button
-                  onClick={goToDashboard}
-                  className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white active:bg-slate-700 dark:bg-white dark:text-slate-900 sm:text-sm"
-                >
-                  Dashboard
-                </button>
-              )}
+              <button
+                onClick={() => goTo(user.role === "admin" ? "/admin" : "/dashboard")}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 sm:text-sm transition"
+              >
+                Dashboard
+              </button>
 
-              {/* Avatar + dropdown */}
               <div className="relative" ref={menuRef}>
                 <button
+                  type="button"
                   onClick={() => setOpen((s) => !s)}
-                  className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm active:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:active:bg-slate-900 sm:px-3"
+                  className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:hover:bg-slate-900 sm:px-3 transition"
                 >
-                  {/* Avatar with honor-score ring */}
-                  <span
-                    className={`flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 font-black text-xs text-white ring-2 dark:bg-white dark:text-slate-900 ${avatarRing}`}
-                  >
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 font-black text-xs text-white dark:bg-white dark:text-slate-900">
                     {user.name?.[0]?.toUpperCase() || "U"}
                   </span>
-
                   <div className="hidden text-left leading-tight md:block">
-                    <p className="text-sm font-black text-slate-900 dark:text-white">
-                      {user.name}
-                    </p>
-                    <p className="text-[10px] font-bold text-slate-500">
-                      {user.email}
-                    </p>
+                    <p className="text-sm font-black text-slate-900 dark:text-white">{user.name}</p>
+                    <p className="text-[10px] font-bold text-slate-500">{user.email}</p>
                   </div>
-                  <ChevronDown size={15} className="text-slate-500" />
+                  <ChevronDown size={15} className={`text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} />
                 </button>
 
                 {open && (
                   <div className="absolute right-0 z-50 mt-2 w-60 overflow-hidden rounded-2xl border bg-white shadow-xl dark:border-slate-800 dark:bg-slate-950">
-                    {/* ── Honor score row ── */}
                     {user.honorScore !== undefined && (
                       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
-                        <span className="text-xs font-black text-slate-500 dark:text-slate-400">
-                          Honor Score
-                        </span>
+                        <span className="text-xs font-black text-slate-500 dark:text-slate-400">Honor Score</span>
                         <HonorScoreBadge score={user.honorScore} />
                       </div>
                     )}
-
-                    {/* ── Menu items ── */}
-                    <button
-                      onClick={() => {
-                        setOpen(false);
-                        goToDashboard();
-                      }}
-                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
-                    >
-                      <LayoutDashboard size={15} /> Dashboard
+                    <button type="button" onClick={() => goTo(user.role === "admin" ? "/admin" : "/dashboard")}
+                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900 transition">
+                      <LayoutDashboard size={15} className="text-slate-400" /> Dashboard
                     </button>
-
                     {user.role === "freelancer" && (
-                      <button
-                        onClick={() => {
-                          setOpen(false);
-                          router.push("/calendar");
-                        }}
-                        className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
-                      >
-                        <CalendarDays size={15} /> Calendar
+                      <button type="button" onClick={() => goTo("/calendar")}
+                        className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900 transition">
+                        <CalendarDays size={15} className="text-slate-400" /> Calendar
                       </button>
                     )}
-
-                    <button
-                      onClick={goToProfile}
-                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
-                    >
-                      <UserIcon size={15} /> My Profile
+                    <button type="button" onClick={() => goTo(user.role === "freelancer" ? "/freelancer/profile" : user.role === "client" ? "/client/profile" : "/admin")}
+                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900 transition">
+                      <UserIcon size={15} className="text-slate-400" /> My Profile
                     </button>
-
                     {user.role !== "admin" && (
-                      <button
-                        onClick={handleSwitchRole}
-                        className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900"
-                      >
-                        <Repeat size={15} /> Switch Role
+                      <button type="button" onClick={handleSwitchRole}
+                        className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900 transition">
+                        <Repeat size={15} className="text-slate-400" /> Switch Role
                       </button>
                     )}
-
                     <div className="h-px bg-slate-100 dark:bg-slate-800" />
-
-                    <button
-                      onClick={handleLogout}
-                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-black text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-                    >
+                    <button type="button" onClick={handleLogout}
+                      className="flex w-full items-center gap-3 px-4 py-3.5 text-sm font-black text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition">
                       <LogOut size={15} /> Logout
                     </button>
                   </div>
@@ -12357,12 +12806,28 @@ export default function Header() {
 import { usePathname } from "next/navigation";
 import Header from "@/components/Header";
 
+// All routes listed here use their own DashboardHeader (via their layout files).
+// The public Header should NOT render on these routes to avoid double headers.
+const AUTH_ONLY_PREFIXES = [
+  "/dashboard",
+  "/freelancer",  // has own DashboardHeader via freelancer/layout.js (except /freelancer/[id] handled there)
+  "/bookings",
+  "/calendar",
+  "/client",
+  "/disputes",
+  "/book",
+  "/payment",
+  "/admin",
+];
+
 export default function HeaderWrapper() {
   const pathname = usePathname();
 
-  // ✅ Hide header in dashboard AND freelancer routes
-  if (pathname?.startsWith("/dashboard")) return null;
-  if (pathname?.startsWith("/freelancer")) return null;
+  const isAuthRoute = AUTH_ONLY_PREFIXES.some((prefix) =>
+    pathname?.startsWith(prefix),
+  );
+
+  if (isAuthRoute) return null;
 
   return <Header />;
 }
@@ -12659,12 +13124,12 @@ function StatCard({
   icon: React.ReactNode;
 }) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-white/10 dark:bg-slate-950">
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-white/10 dark:bg-slate-900">
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
           {label}
         </p>
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
           {icon}
         </div>
       </div>
@@ -12789,339 +13254,338 @@ export default function MyBookingsPage() {
 
   if (loading)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
+      <div className="flex min-h-[40vh] items-center justify-center">
         <Loader2 size={32} className="animate-spin text-slate-400" />
       </div>
     );
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-24 dark:bg-slate-950">
-      <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-black text-slate-900 dark:text-white">
-              My Bookings
-            </h1>
-            <p className="text-sm font-bold text-slate-500">
-              Track and manage your service bookings
-            </p>
-          </div>
-          <button
-            onClick={fetchBookings}
-            className="flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-xs font-black text-slate-700 ring-1 ring-black/5 active:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-white/10"
-          >
-            <RefreshCw size={14} /> Refresh
-          </button>
+    // ✅ No min-h-screen or bg here — parent layout provides the shell.
+    // space-y-5 gives consistent vertical rhythm.
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-black text-slate-900 dark:text-white">
+            My Bookings
+          </h1>
+          <p className="text-sm font-bold text-slate-500">
+            Track and manage your service bookings
+          </p>
         </div>
+        <button
+          onClick={fetchBookings}
+          className="flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-xs font-black text-slate-700 ring-1 ring-black/5 active:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-white/10 shrink-0"
+        >
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatCard
-            label="Total"
-            value={stats.total}
-            icon={<Briefcase size={16} />}
+      {/* Stats */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard
+          label="Total"
+          value={stats.total}
+          icon={<Briefcase size={16} />}
+        />
+        <StatCard
+          label="Active"
+          value={stats.active}
+          icon={<Zap size={16} />}
+        />
+        <StatCard
+          label="Completed"
+          value={stats.completed}
+          icon={<CheckCircle2 size={16} />}
+        />
+        <StatCard
+          label="Disputed"
+          value={stats.disputed}
+          icon={<AlertCircle size={16} />}
+        />
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <Search
+            size={15}
+            className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
           />
-          <StatCard
-            label="Active"
-            value={stats.active}
-            icon={<Zap size={16} />}
-          />
-          <StatCard
-            label="Completed"
-            value={stats.completed}
-            icon={<CheckCircle2 size={16} />}
-          />
-          <StatCard
-            label="Disputed"
-            value={stats.disputed}
-            icon={<AlertCircle size={16} />}
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search bookings…"
+            className="w-full rounded-2xl bg-white py-3 pl-10 pr-4 text-sm font-bold text-slate-900 ring-1 ring-black/5 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 dark:bg-slate-900 dark:text-white dark:ring-white/10 dark:focus:ring-white/30"
           />
         </div>
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+          <Filter size={14} className="shrink-0 text-slate-400" />
+          {(["all", ...ALL_STATUSES] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setFilter(s)}
+              className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black transition ${filter === s ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-white text-slate-600 ring-1 ring-black/5 dark:bg-slate-900 dark:text-slate-300 dark:ring-white/10"}`}
+            >
+              {s === "all"
+                ? "All"
+                : s === "pending_approval"
+                  ? "Approval"
+                  : s.replace("_", " ")}
+            </button>
+          ))}
+        </div>
+      </div>
 
-        {/* Filters */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <Search
-              size={15}
-              className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-            />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search bookings…"
-              className="w-full rounded-2xl bg-white py-3 pl-10 pr-4 text-sm font-bold text-slate-900 ring-1 ring-black/5 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 dark:bg-slate-900 dark:text-white dark:ring-white/10 dark:focus:ring-white/30"
-            />
-          </div>
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            <Filter size={14} className="shrink-0 text-slate-400" />
-            {(["all", ...ALL_STATUSES] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setFilter(s)}
-                className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black transition ${filter === s ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-white text-slate-600 ring-1 ring-black/5 dark:bg-slate-900 dark:text-slate-300 dark:ring-white/10"}`}
+      {/* List */}
+      {filtered.length === 0 ? (
+        <div className="flex flex-col items-center gap-4 py-20 text-center">
+          <Briefcase size={48} className="text-slate-300" />
+          <p className="font-black text-slate-500">No bookings found</p>
+          {isClient && (
+            <button
+              onClick={() => router.push("/search")}
+              className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white dark:bg-white dark:text-slate-900"
+            >
+              Find Freelancers
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map((b) => {
+            const isDigital = b.serviceCategory === "digital";
+            const isExp = expanded === b._id;
+
+            const canAccept = isFreelancer && b.status === "pending";
+            const canDeliver =
+              isFreelancer &&
+              ["confirmed", "in_progress"].includes(b.status) &&
+              b.pricingType !== "milestone";
+            const canConfirmField =
+              isClient && b.status === "pending_approval";
+            const canRelease =
+              isClient &&
+              b.serviceCategory === "digital" &&
+              b.status === "in_progress" &&
+              b.paymentStatus === "held";
+            const canReview = isClient && b.status === "completed";
+            const canDispute =
+              !canConfirmField &&
+              ["confirmed", "in_progress", "completed"].includes(b.status);
+
+            return (
+              <div
+                key={b._id}
+                className="overflow-hidden rounded-3xl bg-white ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10"
               >
-                {s === "all"
-                  ? "All"
-                  : s === "pending_approval"
-                    ? "Approval"
-                    : s.replace("_", " ")}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* List */}
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <Briefcase size={48} className="text-slate-300" />
-            <p className="font-black text-slate-500">No bookings found</p>
-            {isClient && (
-              <button
-                onClick={() => router.push("/search")}
-                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white dark:bg-white dark:text-slate-900"
-              >
-                Find Freelancers
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {filtered.map((b) => {
-              const isDigital = b.serviceCategory === "digital";
-              const isExp = expanded === b._id;
-
-              // Action logic
-              const canAccept = isFreelancer && b.status === "pending";
-              const canDeliver =
-                isFreelancer &&
-                ["confirmed", "in_progress"].includes(b.status) &&
-                b.pricingType !== "milestone";
-              const canConfirmField =
-                isClient && b.status === "pending_approval";
-              const canRelease =
-                isClient &&
-                b.serviceCategory === "digital" &&
-                b.status === "in_progress" &&
-                b.paymentStatus === "held";
-              const canReview = isClient && b.status === "completed";
-              const canDispute =
-                !canConfirmField &&
-                ["confirmed", "in_progress", "completed"].includes(b.status);
-
-              return (
-                <div
-                  key={b._id}
-                  className="overflow-hidden rounded-3xl bg-white ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10"
-                >
-                  {/* Card header */}
-                  <div className="p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`shrink-0 rounded-full p-1.5 ${isDigital ? "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}
-                          >
-                            {isDigital ? (
-                              <Globe size={12} />
-                            ) : (
-                              <MapPin size={12} />
-                            )}
-                          </span>
-                          <p className="truncate font-black text-slate-900 dark:text-white">
-                            {b.serviceType}
-                          </p>
-                          <StatusPill status={b.status} />
-                        </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-bold text-slate-500">
-                          <span className="flex items-center gap-1">
-                            <Calendar size={11} /> {fmt(b.preferredDate)}
-                          </span>
-                          {b.paymentStatus && <PayBadge ps={b.paymentStatus} />}
-                          {isClient && (
-                            <HonorBadge
-                              score={(b.clientId as any)?.honorScore}
-                            />
+                {/* Card header */}
+                <div className="p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`shrink-0 rounded-full p-1.5 ${isDigital ? "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}
+                        >
+                          {isDigital ? (
+                            <Globe size={12} />
+                          ) : (
+                            <MapPin size={12} />
                           )}
-                          {b.arrivalVerified && (
-                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                              <Navigation size={11} /> Arrived
-                            </span>
-                          )}
-                        </div>
-                        {typeof b.agreedAmount === "number" && (
-                          <p className="mt-1 text-sm font-black text-slate-700 dark:text-slate-200">
-                            ₹{b.agreedAmount.toLocaleString("en-IN")}
-                          </p>
+                        </span>
+                        <p className="truncate font-black text-slate-900 dark:text-white">
+                          {b.serviceType}
+                        </p>
+                        <StatusPill status={b.status} />
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-bold text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <Calendar size={11} /> {fmt(b.preferredDate)}
+                        </span>
+                        {b.paymentStatus && <PayBadge ps={b.paymentStatus} />}
+                        {isClient && (
+                          <HonorBadge
+                            score={(b.clientId as any)?.honorScore}
+                          />
+                        )}
+                        {b.arrivalVerified && (
+                          <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                            <Navigation size={11} /> Arrived
+                          </span>
                         )}
                       </div>
-                      <button
-                        onClick={() => setExpanded(isExp ? null : b._id)}
-                        className="shrink-0 rounded-xl bg-slate-50 p-2 text-slate-500 active:bg-slate-100 dark:bg-slate-800 dark:active:bg-slate-700"
-                      >
-                        {isExp ? (
-                          <ChevronUp size={16} />
-                        ) : (
-                          <ChevronDown size={16} />
-                        )}
-                      </button>
+                      {typeof b.agreedAmount === "number" && (
+                        <p className="mt-1 text-sm font-black text-slate-700 dark:text-slate-200">
+                          ₹{b.agreedAmount.toLocaleString("en-IN")}
+                        </p>
+                      )}
                     </div>
+                    <button
+                      onClick={() => setExpanded(isExp ? null : b._id)}
+                      className="shrink-0 rounded-xl bg-slate-50 p-2 text-slate-500 active:bg-slate-100 dark:bg-slate-800 dark:active:bg-slate-700"
+                    >
+                      {isExp ? (
+                        <ChevronUp size={16} />
+                      ) : (
+                        <ChevronDown size={16} />
+                      )}
+                    </button>
+                  </div>
 
-                    {/* Quick actions */}
-                    <div className="mt-4 flex flex-wrap gap-2">
+                  {/* Quick actions */}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => router.push(`/bookings/${b._id}`)}
+                      className="flex items-center gap-1.5 rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-black text-white active:bg-slate-700 dark:bg-white dark:text-slate-900"
+                    >
+                      <BadgeCheck size={13} /> View Details
+                    </button>
+
+                    {canAccept && (
                       <button
-                        onClick={() => router.push(`/bookings/${b._id}`)}
-                        className="flex items-center gap-1.5 rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-black text-white active:bg-slate-700 dark:bg-white dark:text-slate-900"
+                        onClick={() => updateStatus(b._id, "confirmed")}
+                        disabled={!!actionLoading}
+                        className="flex items-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white active:bg-emerald-700 disabled:opacity-60"
                       >
-                        <BadgeCheck size={13} /> View Details
+                        {actionLoading === `${b._id}:confirmed` ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <CheckCircle2 size={13} />
+                        )}
+                        Accept
                       </button>
+                    )}
 
-                      {canAccept && (
-                        <button
-                          onClick={() => updateStatus(b._id, "confirmed")}
-                          disabled={!!actionLoading}
-                          className="flex items-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white active:bg-emerald-700 disabled:opacity-60"
-                        >
-                          {actionLoading === `${b._id}:confirmed` ? (
-                            <Loader2 size={13} className="animate-spin" />
-                          ) : (
-                            <CheckCircle2 size={13} />
-                          )}
-                          Accept
-                        </button>
+                    {canDeliver && (
+                      <button
+                        onClick={() => updateStatus(b._id, "completed")}
+                        disabled={!!actionLoading}
+                        className="flex items-center gap-1.5 rounded-2xl bg-blue-600 px-4 py-2.5 text-xs font-black text-white active:bg-blue-700 disabled:opacity-60"
+                      >
+                        {actionLoading === `${b._id}:completed` ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <CheckCircle2 size={13} />
+                        )}
+                        {isDigital ? "Mark Delivered" : "Mark Completed"}
+                      </button>
+                    )}
+
+                    {canConfirmField && (
+                      <button
+                        onClick={() => confirmField(b._id)}
+                        disabled={!!actionLoading}
+                        className="flex items-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white active:bg-emerald-700 disabled:opacity-60"
+                      >
+                        {actionLoading === `${b._id}:confirm` ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <ThumbsUp size={13} />
+                        )}
+                        Confirm Done
+                      </button>
+                    )}
+
+                    {canRelease && (
+                      <button
+                        onClick={() => releasePayment(b._id)}
+                        disabled={actionLoading === `${b._id}:release`}
+                        className="flex items-center gap-1.5 rounded-2xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white active:bg-violet-700 disabled:opacity-60"
+                      >
+                        {actionLoading === `${b._id}:release` ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <ShieldCheck size={13} />
+                        )}
+                        Release Payment
+                      </button>
+                    )}
+
+                    {canReview && (
+                      <button
+                        onClick={() => {
+                          setSelectedBooking(b._id);
+                          setShowReview(true);
+                        }}
+                        className="flex items-center gap-1.5 rounded-2xl bg-amber-500 px-4 py-2.5 text-xs font-black text-white active:bg-amber-600"
+                      >
+                        <Star size={13} fill="currentColor" /> Review
+                      </button>
+                    )}
+
+                    {canDispute && (
+                      <button
+                        onClick={() => {
+                          setDisputeBooking(b._id);
+                          setShowDispute(true);
+                        }}
+                        className="flex items-center gap-1.5 rounded-2xl border border-red-200 bg-white px-4 py-2.5 text-xs font-black text-red-600 active:bg-red-50 dark:border-red-500/20 dark:bg-slate-950 dark:text-red-400"
+                      >
+                        <AlertCircle size={13} /> Dispute
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expanded details */}
+                {isExp && (
+                  <div className="border-t border-slate-100 px-5 py-4 dark:border-white/10">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {!isDigital && b.address && (
+                        <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
+                            <MapPin size={13} /> Address
+                          </div>
+                          <p className="mt-1 break-words text-sm font-bold text-slate-900 dark:text-white">
+                            {b.address}
+                          </p>
+                        </div>
                       )}
-
-                      {canDeliver && (
-                        <button
-                          onClick={() => updateStatus(b._id, "completed")}
-                          disabled={!!actionLoading}
-                          className="flex items-center gap-1.5 rounded-2xl bg-blue-600 px-4 py-2.5 text-xs font-black text-white active:bg-blue-700 disabled:opacity-60"
-                        >
-                          {actionLoading === `${b._id}:completed` ? (
-                            <Loader2 size={13} className="animate-spin" />
-                          ) : (
-                            <CheckCircle2 size={13} />
-                          )}
-                          {isDigital ? "Mark Delivered" : "Mark Completed"}
-                        </button>
+                      {!isDigital && b.preferredTime && (
+                        <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
+                            <Clock size={13} /> Time
+                          </div>
+                          <p className="mt-1 text-sm font-bold text-slate-900 dark:text-white">
+                            {b.preferredTime}
+                          </p>
+                        </div>
                       )}
-
-                      {canConfirmField && (
-                        <button
-                          onClick={() => confirmField(b._id)}
-                          disabled={!!actionLoading}
-                          className="flex items-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white active:bg-emerald-700 disabled:opacity-60"
-                        >
-                          {actionLoading === `${b._id}:confirm` ? (
-                            <Loader2 size={13} className="animate-spin" />
-                          ) : (
-                            <ThumbsUp size={13} />
-                          )}
-                          Confirm Done
-                        </button>
+                      {isDigital && b.paymentStatus === "held" && (
+                        <div className="col-span-full rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/10">
+                          <div className="flex items-start gap-2">
+                            <Lock
+                              size={15}
+                              className="mt-0.5 text-violet-600 dark:text-violet-400"
+                            />
+                            <p className="text-xs font-bold text-violet-800 dark:text-violet-200">
+                              ₹{(b.agreedAmount || 0).toLocaleString("en-IN")}{" "}
+                              held in escrow.{" "}
+                              {b.status === "in_progress"
+                                ? "Freelancer delivered — review and release payment."
+                                : "Released after you approve the completed work."}
+                            </p>
+                          </div>
+                        </div>
                       )}
-
-                      {canRelease && (
-                        <button
-                          onClick={() => releasePayment(b._id)}
-                          disabled={actionLoading === `${b._id}:release`}
-                          className="flex items-center gap-1.5 rounded-2xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white active:bg-violet-700 disabled:opacity-60"
-                        >
-                          {actionLoading === `${b._id}:release` ? (
-                            <Loader2 size={13} className="animate-spin" />
-                          ) : (
-                            <ShieldCheck size={13} />
-                          )}
-                          Release Payment
-                        </button>
-                      )}
-
-                      {canReview && (
-                        <button
-                          onClick={() => {
-                            setSelectedBooking(b._id);
-                            setShowReview(true);
-                          }}
-                          className="flex items-center gap-1.5 rounded-2xl bg-amber-500 px-4 py-2.5 text-xs font-black text-white active:bg-amber-600"
-                        >
-                          <Star size={13} fill="currentColor" /> Review
-                        </button>
-                      )}
-
-                      {canDispute && (
-                        <button
-                          onClick={() => {
-                            setDisputeBooking(b._id);
-                            setShowDispute(true);
-                          }}
-                          className="flex items-center gap-1.5 rounded-2xl border border-red-200 bg-white px-4 py-2.5 text-xs font-black text-red-600 active:bg-red-50 dark:border-red-500/20 dark:bg-slate-950 dark:text-red-400"
-                        >
-                          <AlertCircle size={13} /> Dispute
-                        </button>
+                      {b.issueDescription && (
+                        <div className="col-span-full rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
+                            <Star size={13} /> Notes
+                          </div>
+                          <p className="mt-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                            {b.issueDescription}
+                          </p>
+                        </div>
                       )}
                     </div>
                   </div>
-
-                  {/* Expanded details */}
-                  {isExp && (
-                    <div className="border-t border-slate-100 px-5 py-4 dark:border-white/10">
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        {!isDigital && b.address && (
-                          <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
-                            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
-                              <MapPin size={13} /> Address
-                            </div>
-                            <p className="mt-1 break-words text-sm font-bold text-slate-900 dark:text-white">
-                              {b.address}
-                            </p>
-                          </div>
-                        )}
-                        {!isDigital && b.preferredTime && (
-                          <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
-                            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
-                              <Clock size={13} /> Time
-                            </div>
-                            <p className="mt-1 text-sm font-bold text-slate-900 dark:text-white">
-                              {b.preferredTime}
-                            </p>
-                          </div>
-                        )}
-                        {isDigital && b.paymentStatus === "held" && (
-                          <div className="col-span-full rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/10">
-                            <div className="flex items-start gap-2">
-                              <Lock
-                                size={15}
-                                className="mt-0.5 text-violet-600 dark:text-violet-400"
-                              />
-                              <p className="text-xs font-bold text-violet-800 dark:text-violet-200">
-                                ₹{(b.agreedAmount || 0).toLocaleString("en-IN")}{" "}
-                                held in escrow.{" "}
-                                {b.status === "in_progress"
-                                  ? "Freelancer delivered — review and release payment."
-                                  : "Released after you approve the completed work."}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                        {b.issueDescription && (
-                          <div className="col-span-full rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
-                            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
-                              <Star size={13} /> Notes
-                            </div>
-                            <p className="mt-1 text-sm font-medium text-slate-700 dark:text-slate-200">
-                              {b.issueDescription}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {showReview && selectedBooking && (
         <ReviewModal
@@ -13986,16 +14450,63 @@ export default function SearchResults({ results = [] }) {
   );
 }
 
---- FILE: client/components/ThemeInit.tsx ---
+--- FILE: client/components/SmartHeader.tsx ---
 "use client";
 
+import { usePathname } from "next/navigation";
+import { useUser } from "@/context/UserContext";
+import PublicHeader from "@/components/Header";
+import DashboardHeader from "@/components/DashboardHeader";
+
+/**
+ * SmartHeader
+ * ─────────────────────────────────────────────
+ * Rule: "/" (homepage) → public Header
+ *       every other route → DashboardHeader
+ *
+ * DashboardHeader internally handles both logged-in
+ * and logged-out states, so no extra logic needed here.
+ */
+export default function SmartHeader() {
+  const pathname = usePathname();
+  const { loading } = useUser();
+
+  // Never flash a header before hydration
+  if (loading) return null;
+
+  if (pathname === "/") {
+    return <PublicHeader />;
+  }
+
+  return <DashboardHeader />;
+}
+
+--- FILE: client/components/ThemeInit.tsx ---
+"use client";
 import { useEffect } from "react";
-import { getTheme, setTheme } from "@/utils/theme";
 
 export default function ThemeInit() {
   useEffect(() => {
-    const theme = getTheme(); // "light" | "dark"
-    setTheme(theme); // ✅ applies html.dark
+    const forceLight = () => {
+      document.documentElement.classList.remove("dark");
+    };
+
+    // Run immediately
+    forceLight();
+
+    // Watch for anything trying to add .dark back (MutationObserver)
+    const observer = new MutationObserver(() => {
+      if (document.documentElement.classList.contains("dark")) {
+        forceLight();
+      }
+    });
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    return () => observer.disconnect();
   }, []);
 
   return null;
@@ -14438,10 +14949,9 @@ export interface User {
 
 /** True when running inside a Capacitor native app (Android/iOS) */
 function isNative(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    !!(window as any).Capacitor?.isNativePlatform?.()
-  );
+  if (typeof window === "undefined") return false;
+  const cap = (window as any).Capacitor;
+  return !!(cap?.isNativePlatform?.() || cap?.Plugins?.Geolocation);
 }
 
 /** Get precise GPS coordinates — uses Capacitor on Android, browser API on web */
@@ -14451,23 +14961,45 @@ export async function getCurrentLocation(): Promise<{
 }> {
   if (isNative()) {
     const { Geolocation } = await import("@capacitor/geolocation");
+
     const perm = await Geolocation.requestPermissions();
-    if (perm.location !== "granted") {
-      throw new Error("Location permission denied");
+
+    // ✅ FIX: "prompt" means Android will show the dialog when we call
+    // getCurrentPosition — it is NOT a denial. Only hard-fail on "denied".
+    if (perm.location === "denied") {
+      throw new Error(
+        "Location permission denied. Please enable it in Settings → App → Permissions.",
+      );
     }
-    const pos = await Geolocation.getCurrentPosition({
-      enableHighAccuracy: true,
-      timeout: 15000,
-    });
+
+    // Race against a hard 12-second timeout so the UI never hangs forever.
+    // On a cold GPS fix Android can take several seconds — 10 s is too tight.
+    const pos = await Promise.race([
+      Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 10000,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error("GPS timed out — please step outside or try again."),
+            ),
+          12000,
+        ),
+      ),
+    ]);
+
     return {
       latitude: pos.coords.latitude,
       longitude: pos.coords.longitude,
     };
   }
 
+  // ── Web / browser fallback ────────────────────────────────────────
   return new Promise((resolve, reject) => {
     if (!navigator?.geolocation) {
-      reject(new Error("Geolocation is not supported"));
+      reject(new Error("Geolocation is not supported by this browser."));
       return;
     }
     navigator.geolocation.getCurrentPosition(
@@ -14476,7 +15008,15 @@ export async function getCurrentLocation(): Promise<{
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
         }),
-      (err) => reject(err),
+      (err) => {
+        // Translate browser error codes into readable messages
+        const msgs: Record<number, string> = {
+          1: "Location permission denied by browser.",
+          2: "Location unavailable — check your connection or GPS.",
+          3: "Location request timed out.",
+        };
+        reject(new Error(msgs[err.code] ?? err.message));
+      },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
   });
@@ -14667,6 +15207,312 @@ export const uploadAvatar = async (req, res) => {
 
   res.json({ avatar: user.avatar });
 };
+
+--- FILE: server/jobs/bookingJobs.js ---
+// server/jobs/bookingJobs.js
+import cron from "node-cron";
+import Razorpay from "razorpay";
+import Booking from "../models/Booking.js";
+import Freelancer from "../models/Freelancer.js";
+import Dispute from "../models/Dispute.js";
+import { deductScore, rewardScore } from "../services/honorScoreService.js";
+import { notify } from "../utils/notify.js";
+import { sendDisputeResolved } from "../services/notificationService.js";
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// ─────────────────────────────────────────────────────────────────
+// FIELD: Auto-cancel when freelancer never arrives (6h past booking time)
+// Runs every hour
+// ─────────────────────────────────────────────────────────────────
+async function runFieldNoShow() {
+  // Any field booking still "confirmed" with no arrival, whose preferredDate
+  // was more than 6 hours ago → freelancer is a no-show.
+  const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+
+  const noShows = await Booking.find({
+    serviceCategory: "field",
+    status: "confirmed",
+    arrivalVerified: false,
+    // preferredDate is a string "YYYY-MM-DD" — cast to date comparison
+    updatedAt: { $lt: sixHoursAgo },
+    createdAt: { $lt: sixHoursAgo },
+  }).lean();
+
+  for (const b of noShows) {
+    try {
+      // Only process bookings whose date has actually passed
+      const bookingDate = b.startTime || new Date(b.preferredDate);
+      if (bookingDate > sixHoursAgo) continue; // not yet overdue
+
+      await Booking.findByIdAndUpdate(b._id, {
+        status: "cancelled",
+        paymentStatus:
+          b.paymentStatus === "field_pending" ? "refunded" : b.paymentStatus,
+      });
+
+      // Penalise freelancer −5 for no-show
+      const fl = await Freelancer.findById(b.freelancerId).lean();
+      if (fl?.user) {
+        await deductScore(
+          fl.user,
+          5,
+          `No-show for field booking "${b.serviceType}"`,
+        );
+        await notify({
+          userId: fl.user,
+          type: "booking_cancelled",
+          message: `Booking "${b.serviceType}" was auto-cancelled — you did not mark arrival within 6 hours. Honor Score −5.`,
+          link: `/freelancer/bookings`,
+        });
+      }
+
+      // Notify client
+      await notify({
+        userId: b.clientId,
+        type: "booking_cancelled",
+        message: `Your booking "${b.serviceType}" was cancelled — the freelancer did not arrive. We apologise for the inconvenience.`,
+        link: `/bookings/${b._id}`,
+      });
+
+      console.log(`[bookingJobs] Field no-show cancelled: ${b._id}`);
+    } catch (err) {
+      console.error(`[bookingJobs] field no-show error ${b._id}:`, err.message);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// DIGITAL: Auto-refund when freelancer misses deadline
+// Runs every hour
+// ─────────────────────────────────────────────────────────────────
+async function runDeadlineRefunds() {
+  const overdue = await Booking.find({
+    serviceCategory: "digital",
+    paymentStatus: "held",
+    status: { $in: ["confirmed", "pending"] },
+    deadline: { $lt: new Date() },
+  }).lean();
+
+  for (const b of overdue) {
+    try {
+      const paise = Math.round((b.escrowAmount || 0) * 100);
+      if (paise < 100) continue;
+
+      const refund = await razorpay.payments.refund(b.razorpayPaymentId, {
+        amount: paise,
+      });
+
+      await Booking.findByIdAndUpdate(b._id, {
+        paymentStatus: "refunded",
+        refundedAmount: b.escrowAmount,
+        razorpayRefundId: refund.id,
+        refundedAt: new Date(),
+        status: "cancelled",
+      });
+
+      // Penalise freelancer −5
+      const fl = await Freelancer.findById(b.freelancerId).lean();
+      if (fl?.user) {
+        await deductScore(fl.user, 5, `Missed deadline for "${b.serviceType}"`);
+        await notify({
+          userId: fl.user,
+          type: "booking_cancelled",
+          message: `Your booking "${b.serviceType}" was auto-cancelled and refunded — deadline missed. Honor Score −5.`,
+          link: `/freelancer/bookings`,
+        });
+      }
+
+      // Notify client of refund
+      await notify({
+        userId: b.clientId,
+        type: "payment_released",
+        message: `Your payment for "${b.serviceType}" was auto-refunded — the freelancer missed the delivery deadline.`,
+        link: `/bookings/${b._id}`,
+      });
+
+      console.log(`[bookingJobs] Deadline refund: ${b._id}`);
+    } catch (err) {
+      console.error(
+        `[bookingJobs] deadline refund error ${b._id}:`,
+        err.message,
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// DIGITAL: Auto-release when client delays approving delivered work
+// Runs every hour
+// ─────────────────────────────────────────────────────────────────
+async function runAutoRelease() {
+  const stale = await Booking.find({
+    serviceCategory: "digital",
+    paymentStatus: "held",
+    status: "in_progress",
+    autoReleaseAt: { $lt: new Date() },
+  }).lean();
+
+  for (const b of stale) {
+    try {
+      await Booking.findByIdAndUpdate(b._id, {
+        paymentStatus: "released",
+        releasedAmount: b.escrowAmount,
+        releasedAt: new Date(),
+        status: "completed",
+      });
+
+      // Penalise client −5 for holding payment
+      await deductScore(
+        b.clientId,
+        5,
+        `Delayed payment release for "${b.serviceType}"`,
+      );
+      await notify({
+        userId: b.clientId,
+        type: "payment_released",
+        message: `Payment for "${b.serviceType}" was auto-released after 7 days of inaction. Honor Score −5.`,
+        link: `/bookings/${b._id}`,
+      });
+
+      // Reward freelancer +2
+      const fl = await Freelancer.findById(b.freelancerId).lean();
+      if (fl?.user) {
+        await rewardScore(fl.user, 2);
+        await notify({
+          userId: fl.user,
+          type: "payment_released",
+          message: `₹${(b.escrowAmount || 0).toLocaleString("en-IN")} auto-released to you for "${b.serviceType}". Honor Score +2.`,
+          link: `/freelancer/bookings`,
+        });
+      }
+
+      console.log(`[bookingJobs] Auto-release: ${b._id}`);
+    } catch (err) {
+      console.error(`[bookingJobs] auto-release error ${b._id}:`, err.message);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// FIELD: Auto-confirm if client doesn't respond in 48 h
+// Runs every hour
+// ─────────────────────────────────────────────────────────────────
+async function runFieldAutoApprove() {
+  const threshold = new Date(Date.now() - 48 * 60 * 60 * 1000);
+
+  const pending = await Booking.find({
+    serviceCategory: "field",
+    status: "pending_approval",
+    updatedAt: { $lt: threshold },
+  }).lean();
+
+  for (const b of pending) {
+    try {
+      await Booking.findByIdAndUpdate(b._id, {
+        status: "completed",
+        paymentStatus: "field_paid",
+      });
+
+      const fl = await Freelancer.findById(b.freelancerId).lean();
+      if (fl?.user) {
+        await rewardScore(fl.user, 2);
+        await notify({
+          userId: fl.user,
+          type: "booking_completed",
+          message: `"${b.serviceType}" auto-confirmed after 48 h. Great work! Honor Score +2.`,
+          link: `/freelancer/bookings`,
+        });
+      }
+
+      await notify({
+        userId: b.clientId,
+        type: "booking_completed",
+        message: `"${b.serviceType}" was auto-confirmed — you had 48 h to review. Please leave a review!`,
+        link: `/bookings/${b._id}`,
+      });
+
+      console.log(`[bookingJobs] Field auto-approve: ${b._id}`);
+    } catch (err) {
+      console.error(
+        `[bookingJobs] field auto-approve error ${b._id}:`,
+        err.message,
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// DISPUTE SLA: auto-resolve open disputes after 5 days
+// ─────────────────────────────────────────────────────────────────
+async function runDisputeSLA() {
+  const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+
+  const stale = await Dispute.find({
+    status: "open",
+    createdAt: { $lte: fiveDaysAgo },
+  });
+
+  for (const dispute of stale) {
+    try {
+      dispute.status = "resolved";
+      dispute.resolution = "release_to_freelancer";
+      dispute.adminNotes = "Auto-resolved by SLA (5 days without admin action)";
+      await dispute.save();
+
+      const booking = await Booking.findById(dispute.bookingId)
+        .populate("clientId", "_id")
+        .populate("freelancerId", "user");
+
+      if (booking) {
+        booking.disputeLocked = false;
+        await booking.save();
+        await sendDisputeResolved(
+          booking.clientId._id,
+          "release_to_freelancer",
+        );
+        await sendDisputeResolved(
+          booking.freelancerId.user,
+          "release_to_freelancer",
+        );
+      }
+
+      console.log(`[bookingJobs] Dispute SLA resolved: ${dispute._id}`);
+    } catch (err) {
+      console.error(
+        `[bookingJobs] dispute SLA error ${dispute._id}:`,
+        err.message,
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Register all jobs — call once at server startup
+// ─────────────────────────────────────────────────────────────────
+export function registerBookingJobs() {
+  // Hourly: field no-show + deadline refunds + auto-release + field auto-approve
+  cron.schedule("0 * * * *", async () => {
+    console.log("[bookingJobs] Running hourly jobs…");
+    await Promise.allSettled([
+      runFieldNoShow(),
+      runDeadlineRefunds(),
+      runAutoRelease(),
+      runFieldAutoApprove(),
+    ]);
+  });
+
+  // Daily at 3 AM: dispute SLA
+  cron.schedule("0 3 * * *", async () => {
+    console.log("[bookingJobs] Running dispute SLA…");
+    await runDisputeSLA();
+  });
+
+  console.log("[bookingJobs] Cron jobs registered.");
+}
 
 --- FILE: server/jobs/disputeSLA.js ---
 import cron from "node-cron";
@@ -17558,16 +18404,20 @@ import multer from "multer";
 import cloudinary from "../config/cloudinary.js";
 import Message, { makeConversationId } from "../models/Message.js";
 import { protect } from "../middleware/auth.js";
+
 const router = express.Router();
+
 // Multer — memory storage, 5 MB limit for chat images
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
-// ─────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────
 // ⚠️  IMPORTANT: Static routes MUST come before /:otherUserId
 // Otherwise Express catches /unread/count as a userId param
-// ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+
 // GET /api/message/unread/count
 router.get("/unread/count", protect, async (req, res) => {
   try {
@@ -17580,10 +18430,12 @@ router.get("/unread/count", protect, async (req, res) => {
     return res.status(500).json({ msg: "Failed to count unread" });
   }
 });
+
 // GET /api/message/conversations/list
 router.get("/conversations/list", protect, async (req, res) => {
   try {
     const userId = req.user._id;
+
     const conversations = await Message.aggregate([
       {
         $match: {
@@ -17614,7 +18466,9 @@ router.get("/conversations/list", protect, async (req, res) => {
       { $sort: { "lastMessage.createdAt": -1 } },
       { $limit: 50 },
     ]);
+
     const User = (await import("../models/User.js")).default;
+
     const enriched = await Promise.all(
       conversations.map(async (conv) => {
         const msg = conv.lastMessage;
@@ -17627,18 +18481,63 @@ router.get("/conversations/list", protect, async (req, res) => {
           .lean();
         return {
           conversationId: conv._id,
-          partner,
+          partner, // null if the user account was deleted
           lastMessage: msg,
           unreadCount: conv.unread,
         };
       }),
     );
-    return res.json({ success: true, conversations: enriched });
+
+    // ✅ Split orphaned (partner deleted) from valid conversations
+    const valid = enriched.filter((c) => c.partner !== null);
+    const orphaned = enriched.filter((c) => c.partner === null);
+
+    // ✅ Auto-clean orphaned message threads from the DB silently
+    if (orphaned.length > 0) {
+      await Message.deleteMany({
+        conversationId: { $in: orphaned.map((c) => c.conversationId) },
+      }).catch((err) => console.error("ORPHAN CLEANUP ERROR:", err.message));
+    }
+
+    return res.json({ success: true, conversations: valid });
   } catch (err) {
     console.error("LIST CONVERSATIONS ERROR:", err);
     return res.status(500).json({ msg: "Failed to list conversations" });
   }
 });
+
+// DELETE /api/message/conversation/orphan/:conversationId
+// Safety-net route: lets the client delete a conversation by its raw ID
+// (used when partner._id is unavailable — e.g. user was deleted mid-session)
+router.delete(
+  "/conversation/orphan/:conversationId",
+  protect,
+  async (req, res) => {
+    try {
+      const { conversationId } = req.params;
+
+      // Security: ensure the requesting user is actually part of this conversation
+      const belongs = await Message.findOne({
+        conversationId,
+        $or: [{ senderId: req.user._id }, { receiverId: req.user._id }],
+      });
+
+      if (!belongs) {
+        return res
+          .status(403)
+          .json({ msg: "Not authorized to delete this conversation" });
+      }
+
+      await Message.deleteMany({ conversationId });
+
+      return res.json({ success: true, msg: "Orphaned conversation deleted" });
+    } catch (err) {
+      console.error("DELETE ORPHAN CONVERSATION ERROR:", err);
+      return res.status(500).json({ msg: "Failed to delete conversation" });
+    }
+  },
+);
+
 // DELETE /api/message/conversation/:otherUserId — delete entire conversation
 router.delete("/conversation/:otherUserId", protect, async (req, res) => {
   try {
@@ -17647,12 +18546,14 @@ router.delete("/conversation/:otherUserId", protect, async (req, res) => {
       req.params.otherUserId,
     );
     const result = await Message.deleteMany({ conversationId });
+
     // Notify the other user in real-time
     if (global.io) {
       global.io
         .to(req.params.otherUserId)
         .emit("conversation_deleted", { conversationId });
     }
+
     return res.json({
       success: true,
       msg: "Conversation deleted",
@@ -17663,6 +18564,8 @@ router.delete("/conversation/:otherUserId", protect, async (req, res) => {
     return res.status(500).json({ msg: "Failed to delete conversation" });
   }
 });
+
+// DELETE /api/message/:messageId — soft-delete a single message
 router.delete("/:messageId", protect, async (req, res) => {
   try {
     const message = await Message.findById(req.params.messageId);
@@ -17674,11 +18577,13 @@ router.delete("/:messageId", protect, async (req, res) => {
         .status(403)
         .json({ msg: "You can only delete your own messages" });
     }
+
     // Soft-delete: keep the document so conversation flow is preserved
     message.text = "";
     message.imageUrl = "";
     message.deleted = true;
     await message.save();
+
     // Notify receiver in real-time
     if (global.io) {
       global.io.to(message.receiverId.toString()).emit("message_deleted", {
@@ -17686,12 +18591,14 @@ router.delete("/:messageId", protect, async (req, res) => {
         conversationId: message.conversationId,
       });
     }
+
     return res.json({ success: true, msg: "Message deleted" });
   } catch (err) {
     console.error("DELETE MESSAGE ERROR:", err);
     return res.status(500).json({ msg: "Failed to delete message" });
   }
 });
+
 // GET /api/message/:otherUserId  ← dynamic route LAST
 router.get("/:otherUserId", protect, async (req, res) => {
   try {
@@ -17703,17 +18610,20 @@ router.get("/:otherUserId", protect, async (req, res) => {
       .sort({ createdAt: 1 })
       .limit(200)
       .lean();
+
     // Mark messages sent to current user as read
     await Message.updateMany(
       { conversationId, receiverId: req.user._id, readByReceiver: false },
       { readByReceiver: true },
     );
+
     return res.json({ success: true, messages });
   } catch (err) {
     console.error("GET MESSAGES ERROR:", err);
     return res.status(500).json({ msg: "Failed to fetch messages" });
   }
 });
+
 // POST /api/message/:otherUserId — send message (text and/or image)
 router.post(
   "/:otherUserId",
@@ -17722,6 +18632,7 @@ router.post(
   async (req, res) => {
     const text = req.body.text?.trim() || "";
     let imageUrl = "";
+
     // Upload image to Cloudinary if present
     if (req.file) {
       try {
@@ -17736,13 +18647,16 @@ router.post(
         return res.status(500).json({ msg: "Failed to upload image" });
       }
     }
+
     if (!text && !imageUrl) {
       return res.status(400).json({ msg: "Message text or image is required" });
     }
+
     try {
       const senderId = req.user._id;
       const receiverId = req.params.otherUserId;
       const conversationId = makeConversationId(senderId, receiverId);
+
       const message = await Message.create({
         conversationId,
         senderId,
@@ -17750,6 +18664,7 @@ router.post(
         text,
         imageUrl,
       });
+
       const payload = {
         _id: message._id,
         conversationId: message.conversationId,
@@ -17761,10 +18676,12 @@ router.post(
         readByReceiver: false,
         createdAt: message.createdAt,
       };
+
       // ✅ Only emit to the RECEIVER — never the sender
       if (global.io) {
         global.io.to(receiverId.toString()).emit("new_message", payload);
       }
+
       return res.status(201).json({ success: true, message: payload });
     } catch (err) {
       console.error("SEND MESSAGE ERROR:", err);
@@ -17772,6 +18689,7 @@ router.post(
     }
   },
 );
+
 export default router;
 
 --- FILE: server/routes/notifications.js ---
@@ -18719,6 +19637,70 @@ router.delete(
 );
 
 export default router;
+
+--- FILE: server/services/honorScoreService.js ---
+// server/services/honorScoreService.js
+import User from "../models/User.js";
+import { notify } from "../utils/notify.js";
+
+/**
+ * Deduct points from a user's honorScore (floor: 0).
+ * Fire-and-forget safe — errors are logged, never thrown.
+ */
+export async function deductScore(userId, points, reason = "") {
+  try {
+    await User.findByIdAndUpdate(userId, [
+      {
+        $set: {
+          honorScore: {
+            $max: [0, { $subtract: ["$honorScore", Math.abs(points)] }],
+          },
+        },
+      },
+    ]);
+
+    if (reason) {
+      await notify({
+        userId,
+        type: "honor_score_changed",
+        message: `Your Honor Score decreased by ${Math.abs(points)}. Reason: ${reason}`,
+        link: "/dashboard",
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.error("[honorScore] deduct error:", err.message);
+  }
+}
+
+/**
+ * Reward points to a user's honorScore (cap: 100).
+ * Fire-and-forget safe.
+ */
+export async function rewardScore(userId, points) {
+  try {
+    await User.findByIdAndUpdate(userId, [
+      {
+        $set: {
+          honorScore: {
+            $min: [100, { $add: ["$honorScore", Math.abs(points)] }],
+          },
+        },
+      },
+    ]);
+  } catch (err) {
+    console.error("[honorScore] reward error:", err.message);
+  }
+}
+
+/**
+ * Returns badge tier from a numeric score.
+ * @returns {"green"|"orange"|"red"}
+ */
+export function scoreBadge(score) {
+  if (score >= 75) return "green";
+  if (score >= 35) return "orange";
+  return "red";
+}
 
 --- FILE: server/services/notificationService.js ---
 // server/services/notificationService.js

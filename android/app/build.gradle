@@ -3,6 +3,7 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.pocketlancer.app"
     compileSdk = rootProject.ext.compileSdkVersion
+
     defaultConfig {
         applicationId "com.pocketlancer.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -10,14 +11,23 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
         aaptOptions {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // 👇 ADD THIS
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "pocketlancer.apk"
         }
     }
 }
@@ -35,14 +45,14 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation "androidx.fragment:fragment:$androidxFragmentVersion"
 
-    // Required for WebSettingsCompat.setForceDark / setAlgorithmicDarkeningAllowed
-    // Used in MainActivity to disable dark mode in the WebView
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
 
     implementation project(':capacitor-android')
+
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+
     implementation project(':capacitor-cordova-android-plugins')
 }
 

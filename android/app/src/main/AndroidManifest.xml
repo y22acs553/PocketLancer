@@ -11,16 +11,6 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:forceDarkAllowed="false">
 
-        <!--
-            android:forceDarkAllowed="false"
-            Prevents Android 10+ from force-inverting colors in the WebView
-            when the OS is in dark mode. Belt-and-suspenders alongside styles.xml.
-
-            android:networkSecurityConfig
-            Allows cleartext (HTTP) traffic to localhost for dev builds.
-            In production this only affects localhost — all other traffic uses HTTPS.
-        -->
-
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"
@@ -49,14 +39,10 @@
 
     </application>
 
-    <!-- Core -->
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!-- Location — required for Capacitor Geolocation plugin -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-
-    <!-- Push Notifications — required on Android 13+ (API 33+) -->
+    <!-- Required for push notifications on Android 13+ (API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
 </manifest>

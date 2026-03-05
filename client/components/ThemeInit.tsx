@@ -1,12 +1,28 @@
 "use client";
-
 import { useEffect } from "react";
-import { getTheme, setTheme } from "@/utils/theme";
 
 export default function ThemeInit() {
   useEffect(() => {
-    const theme = getTheme(); // "light" | "dark"
-    setTheme(theme); // ✅ applies html.dark
+    const forceLight = () => {
+      document.documentElement.classList.remove("dark");
+    };
+
+    // Run immediately
+    forceLight();
+
+    // Watch for anything trying to add .dark back (MutationObserver)
+    const observer = new MutationObserver(() => {
+      if (document.documentElement.classList.contains("dark")) {
+        forceLight();
+      }
+    });
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    return () => observer.disconnect();
   }, []);
 
   return null;

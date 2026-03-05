@@ -4,6 +4,7 @@ import { X, Send, Loader2, ImagePlus, Trash2 } from "lucide-react";
 import socket from "@/services/socket";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
+
 interface Message {
   _id: string;
   senderId: string;
@@ -13,12 +14,14 @@ interface Message {
   deleted?: boolean;
   createdAt: string;
 }
+
 interface Props {
   freelancerId: string;
   freelancerName: string;
   freelancerAvatar?: string;
   onClose: () => void;
 }
+
 function timeLabel(dateStr: string) {
   const d = new Date(dateStr);
   const now = new Date();
@@ -30,6 +33,7 @@ function timeLabel(dateStr: string) {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
+
 export default function ChatWindow({
   freelancerId,
   freelancerName,
@@ -44,10 +48,12 @@ export default function ChatWindow({
   const [error, setError] = useState("");
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState("");
+  // ✅ hoveredMsg now works for both mouse hover AND tap-to-reveal on touch
   const [hoveredMsg, setHoveredMsg] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Load message history
   useEffect(() => {
     if (!freelancerId) return;
@@ -58,11 +64,14 @@ export default function ChatWindow({
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [freelancerId]);
+
   // Scroll to bottom
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
   const userId = user?._id;
+
   // Socket listener for incoming messages
   useEffect(() => {
     if (!userId) return;
@@ -84,6 +93,7 @@ export default function ChatWindow({
       socket.off("new_message", handler);
     };
   }, [userId, freelancerId]);
+
   // Socket listener for deleted messages
   useEffect(() => {
     if (!userId) return;
@@ -101,7 +111,15 @@ export default function ChatWindow({
       socket.off("message_deleted", handler);
     };
   }, [userId]);
-  // Handle image selection
+
+  // Tapping anywhere outside a message bubble dismisses the delete button
+  useEffect(() => {
+    if (!hoveredMsg) return;
+    const dismiss = () => setHoveredMsg(null);
+    document.addEventListener("touchstart", dismiss, { passive: true });
+    return () => document.removeEventListener("touchstart", dismiss);
+  }, [hoveredMsg]);
+
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -117,11 +135,13 @@ export default function ChatWindow({
     setImagePreview(URL.createObjectURL(file));
     setError("");
   };
+
   const clearImage = () => {
     setSelectedImage(null);
     setImagePreview("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
   const handleSend = async () => {
     const trimmed = text.trim();
     if ((!trimmed && !selectedImage) || sending || !userId) return;
@@ -149,7 +169,9 @@ export default function ChatWindow({
       setSending(false);
     }
   };
+
   const handleDelete = async (messageId: string) => {
+    setHoveredMsg(null);
     try {
       await api.delete(`/message/${messageId}`);
       setMessages((prev) =>
@@ -164,12 +186,14 @@ export default function ChatWindow({
       setError(err?.response?.data?.msg || "Failed to delete");
     }
   };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
+
   return (
     <>
       {/* Lightbox */}
@@ -191,12 +215,13 @@ export default function ChatWindow({
           />
         </div>
       )}
+
       <div
-        className="fixed bottom-24 right-6 z-50 w-80 sm:w-96 rounded-3xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden dark:bg-slate-950 dark:border-slate-800"
-        style={{ maxHeight: "520px" }}
+        className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+76px)] lg:bottom-24 right-4 lg:right-6 z-50 w-[calc(100vw-2rem)] max-w-sm sm:max-w-96 rounded-3xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden dark:bg-slate-950 dark:border-slate-800"
+        style={{ maxHeight: "min(520px, 70dvh)" }}
       >
         {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-4 border-b dark:border-slate-800 bg-slate-900 dark:bg-slate-800">
+        <div className="flex items-center gap-3 px-5 py-4 border-b dark:border-slate-800 bg-slate-900 dark:bg-slate-800 flex-shrink-0">
           <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center text-white font-black text-sm flex-shrink-0">
             {freelancerName?.slice(0, 1).toUpperCase() ?? "?"}
           </div>
@@ -213,6 +238,7 @@ export default function ChatWindow({
             <X size={16} />
           </button>
         </div>
+
         {/* Messages */}
         <div
           className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
@@ -244,12 +270,22 @@ export default function ChatWindow({
                   </div>
                 );
               }
+
+              const deleteVisible = isMine && hoveredMsg === m._id;
+
               return (
                 <div
                   key={m._id}
                   className={`flex ${isMine ? "justify-end" : "justify-start"} group`}
-                  onMouseEnter={() => setHoveredMsg(m._id)}
-                  onMouseLeave={() => setHoveredMsg(null)}
+                  // Desktop: show delete on hover
+                  onMouseEnter={() => isMine && setHoveredMsg(m._id)}
+                  onMouseLeave={() => isMine && setHoveredMsg(null)}
+                  // ✅ Mobile: tap the bubble to toggle delete button
+                  onTouchStart={(e) => {
+                    if (!isMine) return;
+                    e.stopPropagation(); // prevent the dismiss listener from firing
+                    setHoveredMsg((prev) => (prev === m._id ? null : m._id));
+                  }}
                 >
                   <div className="relative max-w-[75%]">
                     <div
@@ -276,14 +312,18 @@ export default function ChatWindow({
                         {timeLabel(m.createdAt)}
                       </p>
                     </div>
-                    {/* Delete button — only for own messages */}
-                    {isMine && hoveredMsg === m._id && (
+
+                    {/* ✅ Delete button — visible on hover (desktop) or tap (mobile) */}
+                    {deleteVisible && (
                       <button
-                        onClick={() => handleDelete(m._id)}
-                        className="absolute -left-8 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center rounded-full bg-red-100 text-red-500 hover:bg-red-200 transition dark:bg-red-900/30 dark:text-red-400"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(m._id);
+                        }}
+                        className="absolute -left-9 top-1/2 -translate-y-1/2 h-7 w-7 flex items-center justify-center rounded-full bg-red-100 text-red-500 hover:bg-red-200 transition dark:bg-red-900/30 dark:text-red-400 shadow-sm"
                         title="Delete message"
                       >
-                        <Trash2 size={12} />
+                        <Trash2 size={13} />
                       </button>
                     )}
                   </div>
@@ -293,15 +333,17 @@ export default function ChatWindow({
           )}
           <div ref={bottomRef} />
         </div>
+
         {/* Error */}
         {error && (
-          <div className="px-4 py-2 text-xs font-bold text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400">
+          <div className="px-4 py-2 text-xs font-bold text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400 flex-shrink-0">
             {error}
           </div>
         )}
+
         {/* Image Preview */}
         {imagePreview && (
-          <div className="px-4 py-2 border-t dark:border-slate-800">
+          <div className="px-4 py-2 border-t dark:border-slate-800 flex-shrink-0">
             <div className="relative inline-block">
               <img
                 src={imagePreview}
@@ -317,9 +359,9 @@ export default function ChatWindow({
             </div>
           </div>
         )}
+
         {/* Input */}
-        <div className="px-4 py-3 border-t dark:border-slate-800 flex items-end gap-2">
-          {/* Hidden file input */}
+        <div className="px-4 py-3 border-t dark:border-slate-800 flex items-end gap-2 flex-shrink-0">
           <input
             type="file"
             ref={fileInputRef}
@@ -327,7 +369,6 @@ export default function ChatWindow({
             className="hidden"
             onChange={handleImageSelect}
           />
-          {/* Attachment button */}
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={sending}

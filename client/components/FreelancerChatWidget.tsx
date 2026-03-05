@@ -7,6 +7,9 @@
  * 2. Unread count only loaded when user is logged in AND widget is opened
  * 3. No API calls block navigation or page render
  * 4. Badge only increments for RECEIVER, never for SENDER
+ * 5. Conversation delete button always visible on mobile (touch-friendly)
+ * 6. Outside-click handler covers both mouse and touch events
+ * 7. Orphaned conversations (deleted partner) are deletable via conversationId
  */
 import { useEffect, useRef, useState } from "react";
 import { MessageCircle, X, ChevronDown, Trash2 } from "lucide-react";
@@ -14,6 +17,7 @@ import socket from "@/services/socket";
 import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
 import ChatWindow from "./ChatWindow";
+
 interface Conversation {
   conversationId: string;
   partner: { _id: string; name: string; profilePic?: string } | null;
@@ -26,6 +30,7 @@ interface Conversation {
   };
   unreadCount: number;
 }
+
 export default function FreelancerChatWidget() {
   const { user } = useUser();
   const [open, setOpen] = useState(false);
@@ -38,8 +43,8 @@ export default function FreelancerChatWidget() {
   } | null>(null);
   const [loadingConvos, setLoadingConvos] = useState(false);
   const widgetRef = useRef<HTMLDivElement>(null);
+
   // Listen for "open-chat" events dispatched by profile pages
-  // This avoids importing ChatWindow or socket in every page
   useEffect(() => {
     const handler = (e: Event) => {
       const { userId, name, avatar } = (e as CustomEvent).detail;
@@ -51,21 +56,21 @@ export default function FreelancerChatWidget() {
     window.addEventListener("open-chat", handler);
     return () => window.removeEventListener("open-chat", handler);
   }, []);
+
   // Load unread count once after login — non-blocking
   useEffect(() => {
     if (!user?._id) return;
-    // ✅ correct path: /message/ not /messages/
     api
       .get("/message/unread/count")
       .then((r) => setTotalUnread(r.data.count || 0))
-      .catch(() => {}); // silently ignore — never crash the app
+      .catch(() => {});
   }, [user?._id]);
+
   // Socket: listen for new messages — only count if WE are the receiver
   const userId = user?._id;
   useEffect(() => {
     if (!userId) return;
     const handler = (msg: any) => {
-      // ✅ Only increment badge for receiver, NEVER for sender
       if (msg.receiverId?.toString() === userId) {
         setTotalUnread((n) => n + 1);
       }
@@ -75,17 +80,18 @@ export default function FreelancerChatWidget() {
       socket.off("new_message", handler);
     };
   }, [userId]);
+
   // Load conversations when panel opens
   useEffect(() => {
     if (!open || !user?._id) return;
     setLoadingConvos(true);
-    // ✅ correct path: /message/ not /messages/
     api
       .get("/message/conversations/list")
       .then((r) => setConversations(r.data.conversations || []))
       .catch(() => {})
       .finally(() => setLoadingConvos(false));
   }, [open, user?._id]);
+
   // Listen for conversation_deleted from the other user
   useEffect(() => {
     if (!userId) return;
@@ -99,18 +105,28 @@ export default function FreelancerChatWidget() {
       socket.off("conversation_deleted", handler);
     };
   }, [userId]);
+
   const handleDeleteConversation = async (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     conv: Conversation,
   ) => {
-    e.stopPropagation(); // don't open the chat
-    if (!conv.partner) return;
+    e.stopPropagation();
+
+    const partnerName = conv.partner?.name ?? "this conversation";
     const ok = window.confirm(
-      `Delete entire conversation with ${conv.partner.name}? This cannot be undone.`,
+      `Delete entire conversation with ${partnerName}? This cannot be undone.`,
     );
     if (!ok) return;
+
     try {
-      await api.delete(`/message/conversation/${conv.partner._id}`);
+      if (conv.partner) {
+        // Normal case — delete by partner user ID
+        await api.delete(`/message/conversation/${conv.partner._id}`);
+      } else {
+        // Orphaned case — partner account deleted, use raw conversationId
+        await api.delete(`/message/conversation/orphan/${conv.conversationId}`);
+      }
+
       setConversations((prev) =>
         prev.filter((c) => c.conversationId !== conv.conversationId),
       );
@@ -119,17 +135,31 @@ export default function FreelancerChatWidget() {
       console.error("Delete conversation error:", err);
     }
   };
-  // Close on outside click
+
+  // Close on outside click AND outside touch
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (widgetRef.current && !widgetRef.current.contains(e.target as Node)) {
+    const handler = (e: MouseEvent | TouchEvent) => {
+      const target =
+        e.type === "touchstart"
+          ? document.elementFromPoint(
+              (e as TouchEvent).touches[0].clientX,
+              (e as TouchEvent).touches[0].clientY,
+            )
+          : (e as MouseEvent).target;
+      if (widgetRef.current && !widgetRef.current.contains(target as Node)) {
         setOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
   }, []);
+
   const handleOpenConversation = (conv: Conversation) => {
+    // Only open chat if partner still exists
     if (!conv.partner) return;
     setActiveChat({
       userId: conv.partner._id,
@@ -137,7 +167,6 @@ export default function FreelancerChatWidget() {
       avatar: conv.partner.profilePic,
     });
     setOpen(false);
-    // Reduce badge count
     setConversations((prev) =>
       prev.map((c) =>
         c.conversationId === conv.conversationId ? { ...c, unreadCount: 0 } : c,
@@ -145,8 +174,9 @@ export default function FreelancerChatWidget() {
     );
     setTotalUnread((n) => Math.max(0, n - conv.unreadCount));
   };
-  // Don't render anything if user is not logged in
+
   if (!user) return null;
+
   return (
     <>
       {/* Active chat window */}
@@ -158,25 +188,27 @@ export default function FreelancerChatWidget() {
           onClose={() => setActiveChat(null)}
         />
       )}
+
       {/* Floating button + panel */}
       <div
         ref={widgetRef}
-        className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3"
+        className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+76px)] lg:bottom-6 right-4 z-50 flex flex-col items-end gap-3"
       >
         {/* Conversations panel */}
         {open && !activeChat && (
           <div className="w-80 rounded-3xl border border-slate-200 bg-white shadow-2xl dark:bg-slate-950 dark:border-slate-800 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b dark:border-slate-800">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
               <p className="font-black text-slate-900 dark:text-white">
                 Messages
               </p>
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
               >
                 <X size={15} />
               </button>
             </div>
+
             <div className="max-h-80 overflow-y-auto">
               {loadingConvos ? (
                 <div className="flex items-center justify-center py-8 text-slate-400 text-sm font-bold">
@@ -191,47 +223,68 @@ export default function FreelancerChatWidget() {
                   </p>
                 </div>
               ) : (
-                conversations.map((conv) => (
-                  <div
-                    key={conv.conversationId}
-                    onClick={() => handleOpenConversation(conv)}
-                    className="group w-full flex items-center gap-3 px-5 py-3 border-b last:border-0 hover:bg-slate-50 dark:hover:bg-slate-900 dark:border-slate-800/60 text-left transition cursor-pointer"
-                  >
-                    <div className="h-9 w-9 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center font-black text-sm flex-shrink-0">
-                      {conv.partner?.name?.slice(0, 1).toUpperCase() ?? "?"}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-black text-slate-900 dark:text-white truncate">
-                          {conv.partner?.name ?? "Unknown"}
-                        </p>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {conv.unreadCount > 0 && (
-                            <span className="h-5 min-w-[20px] px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
-                              {conv.unreadCount}
-                            </span>
-                          )}
-                          <button
-                            onClick={(e) => handleDeleteConversation(e, conv)}
-                            className="h-6 w-6 rounded-lg flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 opacity-0 group-hover:opacity-100 transition-all"
-                            title="Delete conversation"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                conversations.map((conv) => {
+                  const isOrphaned = !conv.partner;
+                  return (
+                    <div
+                      key={conv.conversationId}
+                      onClick={() => handleOpenConversation(conv)}
+                      className={[
+                        "group w-full flex items-center gap-3 px-5 py-3 border-b last:border-0",
+                        "dark:border-slate-800/60 text-left transition",
+                        isOrphaned
+                          ? "opacity-50 cursor-default"
+                          : "hover:bg-slate-50 dark:hover:bg-slate-900 cursor-pointer",
+                      ].join(" ")}
+                    >
+                      {/* Avatar */}
+                      <div className="h-9 w-9 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center font-black text-sm flex-shrink-0">
+                        {conv.partner?.name?.slice(0, 1).toUpperCase() ?? "?"}
                       </div>
-                      <p className="text-xs font-bold text-slate-400 truncate mt-0.5">
-                        {conv.lastMessage?.senderId?.toString() === user._id
-                          ? `You: ${conv.lastMessage.text}`
-                          : (conv.lastMessage?.text ?? "")}
-                      </p>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-black text-slate-900 dark:text-white truncate">
+                            {conv.partner?.name ?? "Deleted Account"}
+                          </p>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {conv.unreadCount > 0 && (
+                              <span className="h-5 min-w-[20px] px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
+                                {conv.unreadCount}
+                              </span>
+                            )}
+                            {/* Delete always shown — works for both normal + orphaned */}
+                            <button
+                              onClick={(e) => handleDeleteConversation(e, conv)}
+                              onTouchEnd={(e) =>
+                                handleDeleteConversation(e, conv)
+                              }
+                              className="h-7 w-7 rounded-lg flex items-center justify-center transition-all
+                                text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20
+                                opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                              title="Delete conversation"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs font-bold text-slate-400 truncate mt-0.5">
+                          {isOrphaned
+                            ? "This account no longer exists"
+                            : conv.lastMessage?.senderId?.toString() ===
+                                user._id
+                              ? `You: ${conv.lastMessage.text}`
+                              : (conv.lastMessage?.text ?? "")}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
         )}
+
         {/* FAB */}
         <button
           onClick={() => setOpen((s) => !s)}

@@ -13,19 +13,23 @@ const config: CapacitorConfig = {
 
   plugins: {
     Geolocation: {
-      // Android: requires fine location permission
+      // Android: requires fine location permission (declared in AndroidManifest)
     },
     PushNotifications: {
       presentationOptions: ["badge", "sound", "alert"],
     },
     SplashScreen: {
       launchShowDuration: 1200,
-      backgroundColor: "#0f172a",
+      backgroundColor: "#F8FAFC", // slate-50 — light mode (was #0f172a dark)
       showSpinner: false,
+      androidScaleType: "CENTER_CROP",
+      splashFullScreen: true,
+      splashImmersive: true,
     },
     StatusBar: {
+      // "Dark" = dark-colored icons/text on status bar — correct for light backgrounds
       style: "Dark",
-      backgroundColor: "#0f172a",
+      backgroundColor: "#F8FAFC", // slate-50 — light background (was #0f172a dark)
     },
     Keyboard: {
       resize: "body",
@@ -34,12 +38,10 @@ const config: CapacitorConfig = {
   },
 
   android: {
-    // Minimum SDK 24 = Android 7.0
     minWebViewVersion: 60,
     allowMixedContent: false,
     captureInput: true,
-    // Prevents white flash on launch
-    backgroundColor: "#0f172a",
+    backgroundColor: "#F8FAFC", // slate-50 — prevents dark flash on launch (was #0f172a)
   },
 
   ios: {

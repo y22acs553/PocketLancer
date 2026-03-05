@@ -3,16 +3,20 @@ import multer from "multer";
 import cloudinary from "../config/cloudinary.js";
 import Message, { makeConversationId } from "../models/Message.js";
 import { protect } from "../middleware/auth.js";
+
 const router = express.Router();
+
 // Multer — memory storage, 5 MB limit for chat images
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
-// ─────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────
 // ⚠️  IMPORTANT: Static routes MUST come before /:otherUserId
 // Otherwise Express catches /unread/count as a userId param
-// ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+
 // GET /api/message/unread/count
 router.get("/unread/count", protect, async (req, res) => {
   try {
@@ -25,10 +29,12 @@ router.get("/unread/count", protect, async (req, res) => {
     return res.status(500).json({ msg: "Failed to count unread" });
   }
 });
+
 // GET /api/message/conversations/list
 router.get("/conversations/list", protect, async (req, res) => {
   try {
     const userId = req.user._id;
+
     const conversations = await Message.aggregate([
       {
         $match: {
@@ -59,7 +65,9 @@ router.get("/conversations/list", protect, async (req, res) => {
       { $sort: { "lastMessage.createdAt": -1 } },
       { $limit: 50 },
     ]);
+
     const User = (await import("../models/User.js")).default;
+
     const enriched = await Promise.all(
       conversations.map(async (conv) => {
         const msg = conv.lastMessage;
@@ -72,18 +80,63 @@ router.get("/conversations/list", protect, async (req, res) => {
           .lean();
         return {
           conversationId: conv._id,
-          partner,
+          partner, // null if the user account was deleted
           lastMessage: msg,
           unreadCount: conv.unread,
         };
       }),
     );
-    return res.json({ success: true, conversations: enriched });
+
+    // ✅ Split orphaned (partner deleted) from valid conversations
+    const valid = enriched.filter((c) => c.partner !== null);
+    const orphaned = enriched.filter((c) => c.partner === null);
+
+    // ✅ Auto-clean orphaned message threads from the DB silently
+    if (orphaned.length > 0) {
+      await Message.deleteMany({
+        conversationId: { $in: orphaned.map((c) => c.conversationId) },
+      }).catch((err) => console.error("ORPHAN CLEANUP ERROR:", err.message));
+    }
+
+    return res.json({ success: true, conversations: valid });
   } catch (err) {
     console.error("LIST CONVERSATIONS ERROR:", err);
     return res.status(500).json({ msg: "Failed to list conversations" });
   }
 });
+
+// DELETE /api/message/conversation/orphan/:conversationId
+// Safety-net route: lets the client delete a conversation by its raw ID
+// (used when partner._id is unavailable — e.g. user was deleted mid-session)
+router.delete(
+  "/conversation/orphan/:conversationId",
+  protect,
+  async (req, res) => {
+    try {
+      const { conversationId } = req.params;
+
+      // Security: ensure the requesting user is actually part of this conversation
+      const belongs = await Message.findOne({
+        conversationId,
+        $or: [{ senderId: req.user._id }, { receiverId: req.user._id }],
+      });
+
+      if (!belongs) {
+        return res
+          .status(403)
+          .json({ msg: "Not authorized to delete this conversation" });
+      }
+
+      await Message.deleteMany({ conversationId });
+
+      return res.json({ success: true, msg: "Orphaned conversation deleted" });
+    } catch (err) {
+      console.error("DELETE ORPHAN CONVERSATION ERROR:", err);
+      return res.status(500).json({ msg: "Failed to delete conversation" });
+    }
+  },
+);
+
 // DELETE /api/message/conversation/:otherUserId — delete entire conversation
 router.delete("/conversation/:otherUserId", protect, async (req, res) => {
   try {
@@ -92,12 +145,14 @@ router.delete("/conversation/:otherUserId", protect, async (req, res) => {
       req.params.otherUserId,
     );
     const result = await Message.deleteMany({ conversationId });
+
     // Notify the other user in real-time
     if (global.io) {
       global.io
         .to(req.params.otherUserId)
         .emit("conversation_deleted", { conversationId });
     }
+
     return res.json({
       success: true,
       msg: "Conversation deleted",
@@ -108,6 +163,8 @@ router.delete("/conversation/:otherUserId", protect, async (req, res) => {
     return res.status(500).json({ msg: "Failed to delete conversation" });
   }
 });
+
+// DELETE /api/message/:messageId — soft-delete a single message
 router.delete("/:messageId", protect, async (req, res) => {
   try {
     const message = await Message.findById(req.params.messageId);
@@ -119,11 +176,13 @@ router.delete("/:messageId", protect, async (req, res) => {
         .status(403)
         .json({ msg: "You can only delete your own messages" });
     }
+
     // Soft-delete: keep the document so conversation flow is preserved
     message.text = "";
     message.imageUrl = "";
     message.deleted = true;
     await message.save();
+
     // Notify receiver in real-time
     if (global.io) {
       global.io.to(message.receiverId.toString()).emit("message_deleted", {
@@ -131,12 +190,14 @@ router.delete("/:messageId", protect, async (req, res) => {
         conversationId: message.conversationId,
       });
     }
+
     return res.json({ success: true, msg: "Message deleted" });
   } catch (err) {
     console.error("DELETE MESSAGE ERROR:", err);
     return res.status(500).json({ msg: "Failed to delete message" });
   }
 });
+
 // GET /api/message/:otherUserId  ← dynamic route LAST
 router.get("/:otherUserId", protect, async (req, res) => {
   try {
@@ -148,17 +209,20 @@ router.get("/:otherUserId", protect, async (req, res) => {
       .sort({ createdAt: 1 })
       .limit(200)
       .lean();
+
     // Mark messages sent to current user as read
     await Message.updateMany(
       { conversationId, receiverId: req.user._id, readByReceiver: false },
       { readByReceiver: true },
     );
+
     return res.json({ success: true, messages });
   } catch (err) {
     console.error("GET MESSAGES ERROR:", err);
     return res.status(500).json({ msg: "Failed to fetch messages" });
   }
 });
+
 // POST /api/message/:otherUserId — send message (text and/or image)
 router.post(
   "/:otherUserId",
@@ -167,6 +231,7 @@ router.post(
   async (req, res) => {
     const text = req.body.text?.trim() || "";
     let imageUrl = "";
+
     // Upload image to Cloudinary if present
     if (req.file) {
       try {
@@ -181,13 +246,16 @@ router.post(
         return res.status(500).json({ msg: "Failed to upload image" });
       }
     }
+
     if (!text && !imageUrl) {
       return res.status(400).json({ msg: "Message text or image is required" });
     }
+
     try {
       const senderId = req.user._id;
       const receiverId = req.params.otherUserId;
       const conversationId = makeConversationId(senderId, receiverId);
+
       const message = await Message.create({
         conversationId,
         senderId,
@@ -195,6 +263,7 @@ router.post(
         text,
         imageUrl,
       });
+
       const payload = {
         _id: message._id,
         conversationId: message.conversationId,
@@ -206,10 +275,12 @@ router.post(
         readByReceiver: false,
         createdAt: message.createdAt,
       };
+
       // ✅ Only emit to the RECEIVER — never the sender
       if (global.io) {
         global.io.to(receiverId.toString()).emit("new_message", payload);
       }
+
       return res.status(201).json({ success: true, message: payload });
     } catch (err) {
       console.error("SEND MESSAGE ERROR:", err);
@@ -217,4 +288,5 @@ router.post(
     }
   },
 );
+
 export default router;
