@@ -10,15 +10,11 @@
  *   registerChatSocket(io);
  * ─────────────────────────────────────────────────────────
  */
-
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
-import Conversation from "../models/Conversation.js";
-import Message from "../models/Message.js";
-
+import Message, { makeConversationId } from "../models/Message.js";
 // Map of userId -> socketId for online presence
 const onlineUsers = new Map();
-
 export function registerChatSocket(io) {
   // ── Auth middleware for socket connections ──────────────
   io.use(async (socket, next) => {
@@ -30,123 +26,64 @@ export function registerChatSocket(io) {
           ?.split(";")
           .find((c) => c.trim().startsWith("token="))
           ?.split("=")[1];
-
       if (!token) return next(new Error("Not authenticated"));
-
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const user = await User.findById(decoded.id).select("-password");
       if (!user) return next(new Error("User not found"));
-
       socket.user = user;
       next();
     } catch {
       next(new Error("Auth failed"));
     }
   });
-
   io.on("connection", (socket) => {
     const userId = String(socket.user._id);
     onlineUsers.set(userId, socket.id);
-
     // Broadcast online status
     io.emit("user_online", { userId });
-
     // ── Join personal room ──────────────────────────────────
     socket.on("join", (uid) => {
       socket.join(String(uid));
     });
-
     // ── Join conversation room ──────────────────────────────
     socket.on("join_conversation", (conversationId) => {
       socket.join(`conv_${conversationId}`);
     });
-
     socket.on("leave_conversation", (conversationId) => {
       socket.leave(`conv_${conversationId}`);
     });
-
     // ── Send message ────────────────────────────────────────
     socket.on("send_message", async (data) => {
       try {
-        const { conversationId, text, image } = data;
-
-        if (!text?.trim() && !image) return;
-
-        // Security: verify sender is a participant
-        const conversation = await Conversation.findById(conversationId);
-        if (!conversation) return;
-
-        const isParticipant = conversation.participants.some(
-          (p) => String(p) === userId,
-        );
-        if (!isParticipant) return;
-
-        // Create message
+        const { receiverId, text } = data;
+        if (!text?.trim() || !receiverId) return;
+        const conversationId = makeConversationId(userId, receiverId);
+        // Create message with correct schema fields
         const message = await Message.create({
           conversationId,
-          sender: socket.user._id,
-          text: text?.trim() || "",
-          image: image || "",
-          readBy: [socket.user._id],
+          senderId: socket.user._id,
+          receiverId,
+          text: text.trim(),
         });
-
-        const populated = await message.populate("sender", "name avatar role");
-
-        // ✅ Emit plain object — Mongoose documents can serialize ObjectIds inconsistently
+        // Emit plain object to both parties
         const plainMsg = {
           _id: String(message._id),
           conversationId: String(message.conversationId),
-          sender: {
-            _id: String(populated.sender._id),
-            name: populated.sender.name,
-            avatar: populated.sender.avatar || "",
-            role: populated.sender.role,
-          },
+          senderId: String(message.senderId),
+          receiverId: String(message.receiverId),
           text: message.text || "",
-          image: message.image || "",
+          readByReceiver: false,
           createdAt: message.createdAt,
-          readBy: [],
         };
-
-        // Update conversation metadata
-        const otherParticipants = conversation.participants.filter(
-          (p) => String(p) !== userId,
-        );
-
-        // Increment unread for other participants — use $inc to avoid Map issues
-        const unreadInc = {};
-        for (const otherId of otherParticipants) {
-          unreadInc[`unreadCount.${String(otherId)}`] = 1;
-        }
-        await Conversation.updateOne(
-          { _id: conversationId },
-          {
-            $set: {
-              lastMessage: text?.trim() || "📷 Image",
-              lastMessageAt: new Date(),
-            },
-            $inc: unreadInc,
-          },
-        );
-
-        // Emit message to everyone in conversation room
-        io.to(`conv_${conversationId}`).emit("new_message", plainMsg);
-
-        // Notify offline participants via their personal room
-        for (const otherId of otherParticipants) {
-          io.to(String(otherId)).emit("chat_notification", {
-            conversationId,
-            senderId: userId,
-            senderName: socket.user.name,
-            preview: text?.trim() || "📷 Image",
-          });
-        }
+        // Emit message to receiver's personal room
+        io.to(String(receiverId)).emit("new_message", plainMsg);
+        // Also emit back to sender for confirmation
+        socket.emit("new_message", plainMsg);
       } catch (err) {
         console.error("send_message error:", err);
         socket.emit("message_error", { msg: "Failed to send message" });
       }
     });
-
     // ── Typing indicators ───────────────────────────────────
     socket.on("typing_start", ({ conversationId }) => {
       socket.to(`conv_${conversationId}`).emit("typing_start", {
@@ -154,11 +91,9 @@ export function registerChatSocket(io) {
         name: socket.user.name,
       });
     });
-
     socket.on("typing_stop", ({ conversationId }) => {
       socket.to(`conv_${conversationId}`).emit("typing_stop", { userId });
     });
-
     // ── Disconnect ──────────────────────────────────────────
     socket.on("disconnect", () => {
       onlineUsers.delete(userId);
@@ -166,5 +101,4 @@ export function registerChatSocket(io) {
     });
   });
 }
-
 export { onlineUsers };

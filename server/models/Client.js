@@ -1,11 +1,9 @@
 import mongoose from "mongoose";
-
 const ClientSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true }, // Will be hashed (bcrypt)
-
     // Client location is also needed for searching nearby services
     location: {
       type: {
@@ -20,5 +18,4 @@ const ClientSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
-
 export default mongoose.model("Client", ClientSchema);
