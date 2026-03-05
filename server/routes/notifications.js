@@ -4,60 +4,56 @@ import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
 
-/**
- * GET /api/notifications
- * fetch notifications of logged user
- */
+// ── GET /api/notifications ────────────────────────────────────────
+// Returns latest 40 notifications for the logged-in user
 router.get("/", protect, async (req, res) => {
   try {
-    const list = await Notification.find({ user: req.user._id })
+    const notifications = await Notification.find({ user: req.user._id })
       .sort({ createdAt: -1 })
-      .limit(30);
+      .limit(40)
+      .lean();
 
-    const unreadCount = await Notification.countDocuments({
-      user: req.user._id,
-      isRead: false,
-    });
-
-    res.json({ success: true, notifications: list, unreadCount });
+    res.json(notifications);
   } catch (err) {
-    console.error("❌ NOTIF FETCH ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    console.error("NOTIFICATION FETCH ERROR:", err);
+    res.status(500).json({ msg: "Failed to fetch notifications" });
   }
 });
 
-/**
- * PATCH /api/notifications/:id/read
- */
+// ── PATCH /api/notifications/:id/read ────────────────────────────
+// Mark a single notification as read (only owner can do this)
 router.patch("/:id/read", protect, async (req, res) => {
   try {
-    const notif = await Notification.findOneAndUpdate(
+    const notification = await Notification.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
-      { isRead: true },
+      { read: true },
       { new: true },
     );
 
-    res.json({ success: true, notification: notif });
+    if (!notification) {
+      return res.status(404).json({ msg: "Notification not found" });
+    }
+
+    res.json({ success: true, notification });
   } catch (err) {
-    console.error("❌ NOTIF READ ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    console.error("MARK READ ERROR:", err);
+    res.status(500).json({ msg: "Failed to update notification" });
   }
 });
 
-/**
- * PATCH /api/notifications/read-all
- */
+// ── PATCH /api/notifications/read-all ────────────────────────────
+// Mark ALL unread notifications as read for the current user
 router.patch("/read-all", protect, async (req, res) => {
   try {
     await Notification.updateMany(
-      { user: req.user._id, isRead: false },
-      { $set: { isRead: true } },
+      { user: req.user._id, read: false },
+      { read: true },
     );
 
     res.json({ success: true });
   } catch (err) {
-    console.error("❌ NOTIF READALL ERROR:", err);
-    res.status(500).json({ msg: "Server error" });
+    console.error("MARK ALL READ ERROR:", err);
+    res.status(500).json({ msg: "Failed to mark all as read" });
   }
 });
 

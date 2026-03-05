@@ -2,9 +2,10 @@
 import { useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
 import api from "@/services/api";
+import socket from "@/services/socket";
 
 export interface User {
-  id: string;
+  _id: string;
   name: string;
   email: string;
   role: "client" | "freelancer" | "admin";
@@ -43,6 +44,16 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     fetchSession().finally(() => setLoading(false));
   }, []);
+
+  // ✅ Use user._id (string) NOT user (object) as dep.
+  // The user object gets a new reference on every context re-render.
+  // Using the object causes this effect to fire in a loop, emitting
+  // repeated "join" events and potentially freezing the dev server.
+  useEffect(() => {
+    if (user?._id) {
+      socket.emit("join", user._id);
+    }
+  }, [user?._id]);
 
   const refreshUser = async () => {
     await fetchSession();

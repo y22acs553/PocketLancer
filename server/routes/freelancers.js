@@ -19,6 +19,101 @@ function isValidCoordinates(latitude, longitude) {
   return true;
 }
 
+/**
+ * getSearchVariants — Fuzzy / stem-aware search patterns
+ *
+ * For a query like "plumber", we want to also match "plumbing", "plumb".
+ * Strategy: strip common English suffixes to get the root, then search
+ * both the original word and the root with a partial-prefix regex.
+ *
+ * Examples:
+ *   plumber  → ["plumber", "plumb"]   → /plumb/i matches "plumbing","plumber"
+ *   plumbing → ["plumbing", "plumb"]  → /plumb/i
+ *   electrician → ["electric"]
+ *   electrical  → ["electric"]
+ *   developer  → ["develop"]
+ *   designing  → ["design"]
+ */
+function getSearchVariants(word) {
+  const w = word.toLowerCase().trim();
+  if (!w) return [];
+
+  const variants = new Set([w]);
+
+  // Strip common suffixes (order matters — longest first)
+  const suffixes = [
+    "ician", // electrician → electric
+    "ation", // installation → install
+    "ting", // installing → install (after -ting → remove 'ting', keep stem)
+    "ling", // travelling
+    "ing", // plumbing → plumb, designing → design
+    "tion", // installation → installa
+    "sion", // extension
+    "ness",
+    "ment",
+    "ance",
+    "ence",
+    "ity",
+    "ive",
+    "ical", // electrical → electr
+    "ical",
+    "al",
+    "er", // plumber → plumb, developer → develop
+    "or", // contractor → contract
+    "eur",
+    "ist", // pianist → pian
+    "ian", // technician → technic
+    "ed", // skilled
+    "ly",
+    "ry", // carpentry → carpent
+    "ery",
+  ];
+
+  for (const suffix of suffixes) {
+    if (w.endsWith(suffix) && w.length - suffix.length >= 3) {
+      variants.add(w.slice(0, w.length - suffix.length));
+    }
+  }
+
+  return Array.from(variants);
+}
+
+/**
+ * Build $or query for a set of skill search terms.
+ * Each word gets expanded into stem variants, each variant becomes a
+ * prefix-based regex so "plumb" matches "plumbing", "plumber" etc.
+ */
+function buildSkillQuery(skillsText) {
+  const keywords = skillsText
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const orClauses = [];
+
+  for (const keyword of keywords) {
+    const variants = getSearchVariants(keyword);
+
+    for (const variant of variants) {
+      // Use word-start match when variant is a short stem (avoid false hits)
+      const regexStr =
+        variant.length <= 4
+          ? `^${variant}` // short stems: anchor to start of word
+          : variant; // longer stems: anywhere in the field
+
+      const regex = { $regex: regexStr, $options: "i" };
+
+      orClauses.push(
+        { skills: { $elemMatch: regex } },
+        { title: regex },
+        { bio: regex },
+      );
+    }
+  }
+
+  return orClauses.length ? { $or: orClauses } : {};
+}
+
 /* =====================================================
    FREELANCER SELF PROFILE
    ===================================================== */
@@ -27,7 +122,6 @@ router.get("/me", protect, authorize("freelancer"), async (req, res) => {
   try {
     let profile = await Freelancer.findOne({ user: req.user._id });
 
-    // ✅ auto-create minimal profile (no location yet)
     if (!profile) {
       profile = await Freelancer.create({
         user: req.user._id,
@@ -36,9 +130,10 @@ router.get("/me", protect, authorize("freelancer"), async (req, res) => {
         skills: [],
         profilePic: "",
         hourlyRate: 0,
+        advanceAmount: 0,
         city: "",
         country: "",
-        category: "field", // default explicit
+        category: "field",
       });
     }
 
@@ -56,6 +151,10 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       bio,
       skills,
       hourlyRate,
+      fixedPrice,
+      advanceAmount,
+      pricingType,
+      milestones,
       latitude,
       longitude,
       city,
@@ -65,17 +164,11 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       pastWorks,
       category,
     } = req.body;
-    // ✅ Validate category
+
     if (category && !["field", "digital"].includes(category)) {
-      return res.status(400).json({
-        msg: "Invalid category",
-      });
-    }
-    if (category === "digital") {
+      return res.status(400).json({ msg: "Invalid category" });
     }
 
-    // ✅ enforce location mandatory when saving profile
-    // ✅ Require location ONLY for field services
     if (
       (category === "field" || !category) &&
       !isValidCoordinates(latitude, longitude)
@@ -85,12 +178,15 @@ router.put("/me", protect, authorize("freelancer"), async (req, res) => {
       });
     }
 
-    // Build update object safely
     const updateData = {
       title,
       bio,
       skills,
       hourlyRate,
+      fixedPrice,
+      advanceAmount: advanceAmount || 0,
+      pricingType,
+      milestones,
       city,
       country,
       profilePic,
@@ -155,16 +251,8 @@ router.get("/search", protect, async (req, res) => {
       };
 
       if (skillsText) {
-        const keywords = skillsText
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-
-        geoQuery.$or = keywords.flatMap((word) => [
-          { skills: { $elemMatch: { $regex: word, $options: "i" } } },
-          { title: { $regex: word, $options: "i" } },
-          { bio: { $regex: word, $options: "i" } },
-        ]);
+        const skillQuery = buildSkillQuery(skillsText);
+        if (skillQuery.$or) geoQuery.$or = skillQuery.$or;
       }
 
       freelancers = await Freelancer.aggregate([
@@ -194,11 +282,13 @@ router.get("/search", protect, async (req, res) => {
             bio: 1,
             skills: 1,
             hourlyRate: 1,
+            advanceAmount: 1,
             city: 1,
             country: 1,
             profilePic: 1,
             location: 1,
             category: 1,
+            pricingType: 1,
             distanceKm: {
               $round: [{ $divide: ["$distanceMeters", 1000] }, 2],
             },
@@ -219,22 +309,16 @@ router.get("/search", protect, async (req, res) => {
       const textQuery = { category: "digital" };
 
       if (skillsText) {
-        const keywords = skillsText
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-
-        textQuery.$or = keywords.flatMap((word) => [
-          { skills: { $elemMatch: { $regex: word, $options: "i" } } },
-          { title: { $regex: word, $options: "i" } },
-          { bio: { $regex: word, $options: "i" } },
-        ]);
+        const skillQuery = buildSkillQuery(skillsText);
+        if (skillQuery.$or) textQuery.$or = skillQuery.$or;
       }
 
       freelancers = await Freelancer.find(textQuery)
         .limit(50)
         .populate("user", "name email")
-        .select("title bio skills hourlyRate city country profilePic category");
+        .select(
+          "title bio skills hourlyRate fixedPrice advanceAmount pricingType city country profilePic category",
+        );
     }
 
     // Exclude self
@@ -269,7 +353,6 @@ router.get("/:id", async (req, res) => {
 
     if (profile.category === "field") {
       const [lng, lat] = profile.location?.coordinates || [];
-
       if (!isValidCoordinates(lat, lng)) {
         return res.status(403).json({
           msg: "Freelancer profile is not active yet",
@@ -281,12 +364,17 @@ router.get("/:id", async (req, res) => {
       success: true,
       profile: {
         _id: profile._id,
+        userId: profile.user?._id, // ← User._id for chat (different from Freelancer._id)
         name: profile.user?.name,
         category: profile.category,
         title: profile.title,
         bio: profile.bio,
         skills: profile.skills,
         hourlyRate: profile.hourlyRate,
+        fixedPrice: profile.fixedPrice,
+        advanceAmount: profile.advanceAmount || 0,
+        pricingType: profile.pricingType || "hourly",
+        milestones: profile.milestones || [],
         city: profile.city,
         country: profile.country,
         profilePic: profile.profilePic || "",

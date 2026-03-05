@@ -29,11 +29,8 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       return res.status(404).json({ msg: "Booking not found" });
     }
 
-    // ✅ Ensure booking belongs to this client (Using 'customer' or 'clientId' based on your schema)
-    // Note: Using 'customer' here as it matches your most recent Booking model update
-    const clientRef = booking.customer || booking.clientId;
-
-    if (clientRef.toString() !== req.user._id.toString()) {
+    // ✅ Ensure booking belongs to this client
+    if (booking.clientId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ msg: "Not your booking" });
     }
 
@@ -54,16 +51,14 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     // ✅ Create review
     const review = await Review.create({
       bookingId,
-      freelancerId: booking.freelancer || booking.freelancerId,
+      freelancerId: booking.freelancerId,
       clientId: req.user._id,
       rating,
       comment,
     });
 
     // ⭐ Update freelancer rating (safe math)
-    const freelancer = await Freelancer.findById(
-      booking.freelancer || booking.freelancerId,
-    );
+    const freelancer = await Freelancer.findById(booking.freelancerId);
 
     const newCount = freelancer.ratingCount + 1;
     const newRating =

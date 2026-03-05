@@ -12,9 +12,9 @@ router.get("/dashboard", protect, authorize("client"), async (req, res) => {
 
     // Industry Standard: Run all counts at the same time using Promise.all (faster)
     const [pending, confirmed, completed] = await Promise.all([
-      Booking.countDocuments({ customer: userId, status: "pending" }),
-      Booking.countDocuments({ customer: userId, status: "confirmed" }),
-      Booking.countDocuments({ customer: userId, status: "completed" }),
+      Booking.countDocuments({ clientId: userId, status: "pending" }),
+      Booking.countDocuments({ clientId: userId, status: "confirmed" }),
+      Booking.countDocuments({ clientId: userId, status: "completed" }),
     ]);
 
     res.json({

@@ -5,6 +5,7 @@ import Freelancer from "../models/Freelancer.js";
 import { protect } from "../middleware/auth.js";
 import crypto from "crypto";
 import { sendPasswordResetEmail } from "../utils/emailUtils.js";
+import { sendPasswordReset } from "../services/notificationService.js";
 
 const router = express.Router();
 
@@ -252,6 +253,11 @@ router.post("/reset-password", async (req, res) => {
 
     await user.save();
 
+    console.log("Password reset success for:", user._id);
+
+    await sendPasswordReset(user._id);
+
+    console.log("Password reset notification sent");
     return res.json({ success: true, msg: "Password reset successful." });
   } catch (err) {
     console.error("RESET PASSWORD ERROR:", err);

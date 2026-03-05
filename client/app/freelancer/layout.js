@@ -12,22 +12,25 @@ export default function FreelancerLayout({ children }) {
   const isPublicProfile =
     pathname.startsWith("/freelancer/") && pathname.split("/").length === 3; // /freelancer/[id]
 
+  // ✅ Use stable primitives — never put the `user` object itself in deps.
+  //    Object reference changes on every context render, causing this effect
+  //    to fire repeatedly which floods the router and freezes navigation.
+  const userId = user?._id ?? null;
+  const userRole = user?.role ?? null;
+
   useEffect(() => {
     if (loading) return;
-
-    // ✅ PUBLIC freelancer profile → allow everyone
     if (isPublicProfile) return;
 
-    // 🔒 Protected freelancer-only pages
-    if (!user) {
+    if (!userId) {
       router.replace("/login");
       return;
     }
 
-    if (user.role !== "freelancer") {
-      router.replace("/dashboard"); // NOT switch-role
+    if (userRole !== "freelancer") {
+      router.replace("/dashboard");
     }
-  }, [loading, user, isPublicProfile, router]);
+  }, [loading, userId, userRole, isPublicProfile, router]);
 
   // Prevent flash
   if (loading) return null;

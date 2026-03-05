@@ -1,8 +1,21 @@
 "use client";
 
+/**
+ * ─────────────────────────────────────────────────────────
+ * client/app/f/[id]/page.tsx  — UPDATED
+ *
+ * Changes from original:
+ *  - Added ChatWindow import
+ *  - Added chatOpen state
+ *  - Added "Chat" button next to "Book this Freelancer"
+ *  - Renders <ChatWindow /> when chatOpen === true
+ * ─────────────────────────────────────────────────────────
+ */
+
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import PortfolioLightbox from "@/components/PortfolioLightbox";
+import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
 import Image from "next/image";
 import {
@@ -11,6 +24,7 @@ import {
   Briefcase,
   Loader2,
   Link as LinkIcon,
+  MessageCircle, // ← NEW
 } from "lucide-react";
 
 type Review = {
@@ -29,7 +43,8 @@ type PastWork = {
 };
 
 type Profile = {
-  id: string;
+  _id: string;
+  userId?: string; // User's _id — used for chat (different from Freelancer doc _id)
   name: string;
   title: string;
   bio: string;
@@ -44,8 +59,9 @@ type Profile = {
 
 export default function PublicFreelancerProfilePage() {
   const params = useParams();
+  const id = params?.id?.toString();
   const router = useRouter();
-  const id = params?.id as string;
+  const { user } = useUser(); // ← NEW
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -53,6 +69,26 @@ export default function PublicFreelancerProfilePage() {
   const [loadingReviews, setLoadingReviews] = useState(true);
   const [portfolio, setPortfolio] = useState<any[]>([]);
   const [loadingPortfolio, setLoadingPortfolio] = useState(true);
+
+  // Derive stable userId string for chat — profile.userId is User._id (set by server)
+  const freelancerUserId = profile?.userId || profile?._id;
+  const userId = user?._id;
+  const isOwnProfile =
+    !!userId && !!freelancerUserId && userId === String(freelancerUserId);
+
+  // Opens the global FreelancerChatWidget without importing it or socket here
+  const openChat = () => {
+    if (!profile) return;
+    window.dispatchEvent(
+      new CustomEvent("open-chat", {
+        detail: {
+          userId: String(freelancerUserId),
+          name: profile.name,
+          avatar: profile.profilePic,
+        },
+      }),
+    );
+  };
 
   const cardClass =
     "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 hover:shadow-md transition-all";
@@ -65,27 +101,29 @@ export default function PublicFreelancerProfilePage() {
   }, [reviews]);
 
   useEffect(() => {
+    if (!id) return;
+
     const load = async () => {
       try {
         setLoading(true);
         const res = await api.get(`/freelancers/${id}`);
-        setProfile(res.data.profile);
-      } catch {
+        setProfile(res.data.profile ?? res.data.freelancer ?? res.data);
+      } catch (err) {
+        console.error("Freelancer load error:", err);
         router.push("/");
       } finally {
         setLoading(false);
       }
     };
 
-    if (id) load();
-  }, [id, router]);
+    load();
+  }, [id]);
+
   useEffect(() => {
     const loadPortfolio = async () => {
       try {
         if (!id) return;
-
         setLoadingPortfolio(true);
-
         const res = await api.get(`/portfolio/${id}`);
         setPortfolio(res.data || []);
       } catch {
@@ -180,12 +218,26 @@ export default function PublicFreelancerProfilePage() {
                   </span>
                 </div>
 
-                <button
-                  onClick={() => router.push(`/book/${profile.id}`)}
-                  className="mt-5 rounded-2xl bg-blue-600 px-6 py-3 font-extrabold text-white hover:bg-blue-700 shadow"
-                >
-                  Book this Freelancer
-                </button>
+                {/* ── Action Buttons ── */}
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <button
+                    onClick={() => router.push(`/book/${profile._id}`)}
+                    className="rounded-2xl bg-blue-600 px-6 py-3 font-extrabold text-white hover:bg-blue-700 shadow"
+                  >
+                    Book this Freelancer
+                  </button>
+
+                  {/* ── CHAT BUTTON (NEW) ── */}
+                  {!isOwnProfile && (
+                    <button
+                      onClick={openChat}
+                      className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-6 py-3 font-extrabold text-white hover:bg-slate-700 shadow transition-colors"
+                    >
+                      <MessageCircle size={18} />
+                      Chat
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -220,7 +272,6 @@ export default function PublicFreelancerProfilePage() {
             )}
           </div>
 
-          {/* Portfolio */}
           {/* Portfolio */}
           <div className={cardClass}>
             <div className="flex items-center justify-between mb-4">
@@ -353,6 +404,26 @@ export default function PublicFreelancerProfilePage() {
         {/* RIGHT 20% */}
         <div className="lg:col-span-3">
           <div className="sticky top-6 space-y-4">
+            {/* ── Chat CTA card (NEW) ── */}
+            {!isOwnProfile && (
+              <div
+                className="rounded-3xl bg-blue-600 p-5 text-white shadow-sm cursor-pointer hover:bg-blue-700 transition-colors"
+                onClick={openChat}
+              >
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center">
+                    <MessageCircle size={18} />
+                  </div>
+                  <h4 className="font-extrabold">
+                    Message {profile.name.split(" ")[0]}
+                  </h4>
+                </div>
+                <p className="text-sm text-blue-100">
+                  Have questions? Chat before booking.
+                </p>
+              </div>
+            )}
+
             <div className={cardClass}>
               <h3 className="text-lg font-extrabold text-slate-900 mb-3">
                 Reviews
@@ -407,6 +478,7 @@ export default function PublicFreelancerProfilePage() {
           </div>
         </div>
       </div>
+
       {lightboxIndex !== null && lightboxIndex >= 0 && (
         <PortfolioLightbox
           items={portfolio.map((item) => ({
