@@ -29,12 +29,37 @@ router.get("/", protect, async (req, res) => {
    UPDATE PROFILE INFO
 ====================================================== */
 router.patch("/", protect, async (req, res) => {
-  const { name, email } = req.body;
+  const {
+    name,
+    email,
+    phone,
+    dateOfBirth,
+    address,
+    city,
+    state,
+    pincode,
+    emailNotifications,
+    smsNotifications,
+  } = req.body;
+
+  // Email format validation
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ msg: "Invalid email format" });
+  }
 
   const user = await User.findById(req.user._id);
 
   if (name) user.name = name;
   if (email) user.email = email;
+  if (phone !== undefined) user.phone = phone;
+  if (dateOfBirth !== undefined) user.dateOfBirth = dateOfBirth || null;
+  if (address !== undefined) user.address = address;
+  if (city !== undefined) user.city = city;
+  if (state !== undefined) user.state = state;
+  if (pincode !== undefined) user.pincode = pincode;
+  if (emailNotifications !== undefined)
+    user.emailNotifications = emailNotifications;
+  if (smsNotifications !== undefined) user.smsNotifications = smsNotifications;
 
   await user.save();
 
@@ -46,6 +71,12 @@ router.patch("/", protect, async (req, res) => {
 ====================================================== */
 router.patch("/password", protect, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
+
+  if (!newPassword || newPassword.length < 6) {
+    return res
+      .status(400)
+      .json({ msg: "New password must be at least 6 characters" });
+  }
 
   const user = await User.findById(req.user._id).select("+password");
 

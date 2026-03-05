@@ -39,6 +39,8 @@ export function registerChatSocket(io) {
   io.on("connection", (socket) => {
     const userId = String(socket.user._id);
     onlineUsers.set(userId, socket.id);
+    // ✅ Auto-join personal room so message.js can emit to this user
+    socket.join(userId);
     // Broadcast online status
     io.emit("user_online", { userId });
     // ── Join personal room ──────────────────────────────────
@@ -72,6 +74,8 @@ export function registerChatSocket(io) {
           senderId: String(message.senderId),
           receiverId: String(message.receiverId),
           text: message.text || "",
+          imageUrl: message.imageUrl || "",
+          deleted: false,
           readByReceiver: false,
           createdAt: message.createdAt,
         };

@@ -3,6 +3,7 @@ import Razorpay from "razorpay";
 import crypto from "crypto";
 import Booking from "../models/Booking.js";
 import Freelancer from "../models/Freelancer.js";
+import User from "../models/User.js";
 import { protect, authorize } from "../middleware/auth.js";
 import { SERVICE_DURATIONS } from "../constants/serviceDurations.js";
 import {
@@ -171,6 +172,13 @@ router.post("/", protect, authorize("client"), async (req, res) => {
           msg: "Date, time, and address are required for field service bookings",
         });
       }
+      // ── Reject past dates ────────────────────────────
+      const today = new Date().toISOString().split("T")[0];
+      if (preferredDate < today) {
+        return res.status(400).json({
+          msg: "Cannot book a date in the past. Please select today or a future date.",
+        });
+      }
     }
 
     const estimatedDurationMinutes = getServiceDuration(serviceType);
@@ -287,6 +295,14 @@ router.post(
   authorize("client"),
   async (req, res) => {
     try {
+      // ── Phone number required before payment ──────────
+      const clientUser = await User.findById(req.user._id);
+      if (!clientUser?.phone || !clientUser.phone.trim()) {
+        return res.status(400).json({
+          msg: "Please add your mobile number in your profile before making a payment.",
+        });
+      }
+
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ msg: "Booking not found" });
 
@@ -556,6 +572,16 @@ router.patch(
           .json({ msg: "Booking locked due to active dispute" });
       }
 
+      // ── Prevent marking future work as completed ──────
+      if (status === "completed" || status === "in_progress") {
+        const bookingDate = booking.startTime || new Date(booking.preferredDate);
+        if (bookingDate > new Date()) {
+          return res.status(400).json({
+            msg: "Cannot mark a future booking as completed or in-progress. The work date has not arrived yet.",
+          });
+        }
+      }
+
       let newStatus = status;
       if (booking.serviceCategory === "digital" && status === "completed") {
         newStatus = "in_progress";
@@ -685,6 +711,14 @@ router.patch(
       }
       if (booking.serviceCategory !== "field") {
         return res.status(400).json({ msg: "Only for field bookings" });
+      }
+
+      // ── Prevent marking future work as field-paid ─────
+      const bookingDate = booking.startTime || new Date(booking.preferredDate);
+      if (bookingDate > new Date()) {
+        return res.status(400).json({
+          msg: "Cannot mark a future booking as paid. The work date has not arrived yet.",
+        });
       }
 
       booking.paymentStatus = "field_paid";

@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
@@ -27,10 +26,10 @@ import {
   TrendingUp,
   Eye,
   Save,
+  Landmark,
 } from "lucide-react";
 import { getCurrentLocation, reverseGeocode } from "@/utils/geolocation";
 import PortfolioManager from "@/components/PortfolioManager";
-
 type Review = {
   _id: string;
   rating: number;
@@ -50,7 +49,13 @@ type Milestone = {
   amount: number;
   order: number;
 };
-
+type BankDetails = {
+  accountHolder: string;
+  accountNumber: string;
+  ifscCode: string;
+  bankName: string;
+  upiId: string;
+};
 type Profile = {
   _id?: string;
   name?: string;
@@ -70,21 +75,19 @@ type Profile = {
   profilePic?: string;
   portfolio?: string[];
   pastWorks?: PastWork[];
+  bankDetails?: BankDetails;
+  dateOfBirth?: string;
 };
-
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
-
 const FIELD =
   "rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/10 dark:bg-slate-900 dark:text-white w-full";
 const CARD =
   "rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950";
-
 export default function FreelancerProfilePage() {
   const { user, loading } = useUser();
   const router = useRouter();
-
   const [profile, setProfile] = useState<Profile | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -96,19 +99,16 @@ export default function FreelancerProfilePage() {
   >("idle");
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(true);
-
   const ratingSummary = useMemo(() => {
     if (!reviews.length) return { avg: 0, count: 0 };
     const avg =
       reviews.reduce((a, r) => a + (r.rating || 0), 0) / reviews.length;
     return { avg: Number(avg.toFixed(1)), count: reviews.length };
   }, [reviews]);
-
   useEffect(() => {
     if (!loading && (!user || user.role !== "freelancer"))
       router.replace("/dashboard");
   }, [loading, user, router]);
-
   useEffect(() => {
     if (user?.role !== "freelancer") return;
     api
@@ -125,7 +125,17 @@ export default function FreelancerProfilePage() {
           name: loaded?.name || user?.name || "Freelancer",
           portfolio: loaded?.portfolio || [],
           pastWorks: loaded?.pastWorks || [],
+          bankDetails: loaded?.bankDetails || {
+            accountHolder: "",
+            accountNumber: "",
+            ifscCode: "",
+            bankName: "",
+            upiId: "",
+          },
           profilePic: loaded?.profilePic || "",
+          dateOfBirth: loaded?.dateOfBirth
+            ? new Date(loaded.dateOfBirth).toISOString().split("T")[0]
+            : "",
         });
         const hasCoords = loaded?.latitude != null && loaded?.longitude != null;
         setLocationStatus(hasCoords ? "ready" : "idle");
@@ -149,10 +159,17 @@ export default function FreelancerProfilePage() {
           pastWorks: [],
           category: "field",
           advanceAmount: 0,
+          bankDetails: {
+            accountHolder: "",
+            accountNumber: "",
+            ifscCode: "",
+            bankName: "",
+            upiId: "",
+          },
+          dateOfBirth: "",
         }),
       );
   }, [user]);
-
   useEffect(() => {
     if (!profile?._id) return;
     setLoadingReviews(true);
@@ -162,7 +179,6 @@ export default function FreelancerProfilePage() {
       .catch(() => setReviews([]))
       .finally(() => setLoadingReviews(false));
   }, [profile?._id]);
-
   const uploadProfilePic = async (file: File) => {
     try {
       setUploadingPic(true);
@@ -180,7 +196,6 @@ export default function FreelancerProfilePage() {
       setUploadingPic(false);
     }
   };
-
   const removeProfilePic = async () => {
     try {
       setUploadingPic(true);
@@ -192,7 +207,6 @@ export default function FreelancerProfilePage() {
       setUploadingPic(false);
     }
   };
-
   const addSkill = () => {
     const skill = skillInput.trim();
     if (!skill) return;
@@ -208,7 +222,6 @@ export default function FreelancerProfilePage() {
     });
     setSkillInput("");
   };
-
   const removeSkill = (idx: number) => {
     setProfile((prev) => {
       if (!prev) return prev;
@@ -217,7 +230,6 @@ export default function FreelancerProfilePage() {
       return { ...prev, skills: updated };
     });
   };
-
   const fetchLocation = async () => {
     try {
       setLocationStatus("fetching");
@@ -236,7 +248,6 @@ export default function FreelancerProfilePage() {
       );
     }
   };
-
   const saveProfile = async () => {
     if (!profile) return;
     if (
@@ -258,7 +269,6 @@ export default function FreelancerProfilePage() {
       setSaving(false);
     }
   };
-
   const addPastWork = () =>
     setProfile((prev) => {
       if (!prev) return prev;
@@ -270,7 +280,6 @@ export default function FreelancerProfilePage() {
         ],
       };
     });
-
   const removePastWork = (idx: number) =>
     setProfile((prev) => {
       if (!prev) return prev;
@@ -278,7 +287,6 @@ export default function FreelancerProfilePage() {
       works.splice(idx, 1);
       return { ...prev, pastWorks: works };
     });
-
   const addMilestone = () =>
     setProfile((prev) => {
       if (!prev) return prev;
@@ -286,7 +294,6 @@ export default function FreelancerProfilePage() {
       ms.push({ title: "", description: "", amount: 0, order: ms.length });
       return { ...prev, milestones: ms };
     });
-
   const removeMilestone = (idx: number) =>
     setProfile((prev) => {
       if (!prev) return prev;
@@ -294,7 +301,6 @@ export default function FreelancerProfilePage() {
       ms.splice(idx, 1);
       return { ...prev, milestones: ms.map((m, i) => ({ ...m, order: i })) };
     });
-
   const updateMilestone = (idx: number, key: keyof Milestone, val: any) =>
     setProfile((prev) => {
       if (!prev) return prev;
@@ -302,7 +308,6 @@ export default function FreelancerProfilePage() {
       ms[idx] = { ...ms[idx], [key]: val };
       return { ...prev, milestones: ms };
     });
-
   const suggestedSkills = useMemo(() => {
     const bag = new Set<string>([
       "Punctuality",
@@ -362,7 +367,6 @@ export default function FreelancerProfilePage() {
       .filter((s) => !current.has(s.toLowerCase()))
       .slice(0, 10);
   }, [profile?.title, profile?.skills, profile?.category]);
-
   if (loading || !profile) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center gap-3 text-slate-600 dark:text-slate-300">
@@ -371,12 +375,10 @@ export default function FreelancerProfilePage() {
       </div>
     );
   }
-
   const hasCoords =
     profile.category === "digital" ||
     (profile.latitude != null && profile.longitude != null);
   const canSave = hasCoords;
-
   const completion = (() => {
     let s = 0;
     if (profile.profilePic) s += 15;
@@ -389,7 +391,6 @@ export default function FreelancerProfilePage() {
     if (profile.hourlyRate > 0 || profile.fixedPrice > 0) s += 10;
     return clamp(s, 0, 100);
   })();
-
   return (
     <div className="w-full">
       {/* Saved toast */}
@@ -398,11 +399,9 @@ export default function FreelancerProfilePage() {
           <CheckCircle2 size={18} /> Profile saved successfully!
         </div>
       )}
-
       <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
         <div className="absolute -top-40 -right-40 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl pointer-events-none" />
         <div className="absolute -bottom-44 -left-44 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
-
         {/* Header */}
         <div className="relative border-b border-slate-200 px-6 py-7 lg:px-10 lg:py-9 dark:border-white/10">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -418,7 +417,6 @@ export default function FreelancerProfilePage() {
                 Complete profile · Stand out in search · Get more bookings
               </p>
             </div>
-
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={() => router.push(`/freelancer/${profile._id}`)}
@@ -443,7 +441,6 @@ export default function FreelancerProfilePage() {
               </button>
             </div>
           </div>
-
           {/* Completion + rating */}
           <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-12">
             <div className="lg:col-span-8">
@@ -517,7 +514,6 @@ export default function FreelancerProfilePage() {
                 </div>
               </div>
             </div>
-
             <div className="lg:col-span-4">
               <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-950">
                 <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
@@ -555,7 +551,6 @@ export default function FreelancerProfilePage() {
             </div>
           </div>
         </div>
-
         {/* Body */}
         <div className="relative grid grid-cols-1 gap-6 px-6 py-6 lg:grid-cols-12 lg:px-10">
           {/* LEFT */}
@@ -614,7 +609,6 @@ export default function FreelancerProfilePage() {
                     Profile photo
                   </p>
                 </div>
-
                 <div className="flex-1 space-y-4">
                   <div>
                     <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
@@ -629,7 +623,6 @@ export default function FreelancerProfilePage() {
                       }
                     />
                   </div>
-
                   <div>
                     <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
                       Service Category
@@ -669,8 +662,22 @@ export default function FreelancerProfilePage() {
                   </div>
                 </div>
               </div>
-            </div>
 
+              {/* Date of Birth */}
+              <div className="mt-5">
+                <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                  Date of Birth
+                </label>
+                <input
+                  type="date"
+                  className={FIELD}
+                  value={profile.dateOfBirth || ""}
+                  onChange={(e) =>
+                    setProfile({ ...profile, dateOfBirth: e.target.value })
+                  }
+                />
+              </div>
+            </div>
             {/* Bio */}
             <div className={CARD}>
               <div className="flex items-center justify-between gap-3">
@@ -697,7 +704,6 @@ export default function FreelancerProfilePage() {
                 }
               />
             </div>
-
             {/* Pricing */}
             <div className={CARD}>
               <h3 className="mb-1 text-base font-black text-slate-900 dark:text-white">
@@ -708,7 +714,6 @@ export default function FreelancerProfilePage() {
                   ? "Field workers use hourly pricing — you'll negotiate final price on-site."
                   : "Choose how you charge digital clients."}
               </p>
-
               {profile.category === "digital" && (
                 <div className="mb-4 grid grid-cols-3 gap-2">
                   {(["hourly", "fixed", "milestone"] as const).map((pt) => (
@@ -729,7 +734,6 @@ export default function FreelancerProfilePage() {
                   ))}
                 </div>
               )}
-
               {(profile.category === "field" ||
                 profile.pricingType === "hourly") && (
                 <div>
@@ -792,7 +796,6 @@ export default function FreelancerProfilePage() {
                     </p>
                   </div>
                 )}
-
               {profile.category === "digital" &&
                 profile.pricingType === "fixed" && (
                   <div>
@@ -820,7 +823,6 @@ export default function FreelancerProfilePage() {
                     </p>
                   </div>
                 )}
-
               {profile.category === "digital" &&
                 profile.pricingType === "milestone" && (
                   <div>
@@ -920,7 +922,6 @@ export default function FreelancerProfilePage() {
                   </div>
                 )}
             </div>
-
             {/* Skills */}
             <div className={CARD}>
               <div className="flex items-center justify-between gap-3">
@@ -936,7 +937,6 @@ export default function FreelancerProfilePage() {
                   {profile.skills?.length || 0} added
                 </span>
               </div>
-
               <div className="mt-4 flex gap-2">
                 <input
                   className={`${FIELD} flex-1`}
@@ -958,7 +958,6 @@ export default function FreelancerProfilePage() {
                   <Plus size={18} />
                 </button>
               </div>
-
               {suggestedSkills.length > 0 && (
                 <div className="mt-3">
                   <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
@@ -981,7 +980,6 @@ export default function FreelancerProfilePage() {
                   </div>
                 </div>
               )}
-
               <div className="mt-4 flex flex-wrap gap-2">
                 {(profile.skills || []).map((s, idx) => (
                   <span
@@ -1005,10 +1003,8 @@ export default function FreelancerProfilePage() {
                 )}
               </div>
             </div>
-
             {/* Portfolio (digital) */}
             {profile.category === "digital" && <PortfolioManager />}
-
             {/* Past Works */}
             <div className={CARD}>
               <div className="flex items-center justify-between gap-3">
@@ -1028,7 +1024,6 @@ export default function FreelancerProfilePage() {
                   <Plus size={14} /> Add Work
                 </button>
               </div>
-
               {(profile.pastWorks || []).length === 0 ? (
                 <div className="mt-4 rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm font-bold text-slate-400 dark:border-white/20">
                   Add at least 2 past works to improve your booking success
@@ -1122,19 +1117,16 @@ export default function FreelancerProfilePage() {
                 </div>
               )}
             </div>
-
-            {/* Location */}
+            {/* Location (field workers only) */}
+            {profile.category === "field" && (
             <div className={CARD}>
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h3 className="text-base font-black text-slate-900 dark:text-white">
-                    Location{" "}
-                    {profile.category === "field" ? "(Required)" : "(Optional)"}
+                    Location (Required)
                   </h3>
                   <p className="mt-1 text-sm font-bold text-slate-500">
-                    {profile.category === "field"
-                      ? "Required for field workers — clients find you by distance."
-                      : "Optional for digital workers — only used for display purposes."}
+                    Required for field workers — clients find you by distance.
                   </p>
                 </div>
                 <button
@@ -1155,7 +1147,6 @@ export default function FreelancerProfilePage() {
                   )}
                 </button>
               </div>
-
               {locationStatus === "ready" || hasCoords ? (
                 <div className="mt-4 rounded-2xl bg-emerald-500/10 px-4 py-3 ring-1 ring-emerald-500/20">
                   <p className="text-sm font-black text-emerald-800 dark:text-emerald-200">
@@ -1173,14 +1164,140 @@ export default function FreelancerProfilePage() {
                 </div>
               )}
             </div>
-
+            )}
+            {/* Bank Details (Digital only) */}
+            {profile.category === "digital" && (
+              <div className={CARD}>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-white">
+                      <Landmark
+                        size={18}
+                        className="inline mr-2 text-blue-500"
+                      />
+                      Bank Account Details
+                    </h3>
+                    <p className="mt-1 text-sm font-bold text-slate-500">
+                      Required for receiving payment settlements. Your details
+                      are encrypted and secure.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                      Account Holder Name
+                    </label>
+                    <input
+                      className={FIELD}
+                      placeholder="As it appears on your bank account"
+                      value={profile.bankDetails?.accountHolder || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          bankDetails: {
+                            ...profile.bankDetails!,
+                            accountHolder: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                      Bank Name
+                    </label>
+                    <input
+                      className={FIELD}
+                      placeholder="e.g. State Bank of India"
+                      value={profile.bankDetails?.bankName || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          bankDetails: {
+                            ...profile.bankDetails!,
+                            bankName: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                      Account Number
+                    </label>
+                    <input
+                      className={FIELD}
+                      placeholder="e.g. 1234567890123456"
+                      value={profile.bankDetails?.accountNumber || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          bankDetails: {
+                            ...profile.bankDetails!,
+                            accountNumber: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                      IFSC Code
+                    </label>
+                    <input
+                      className={FIELD}
+                      placeholder="e.g. SBIN0001234"
+                      value={profile.bankDetails?.ifscCode || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          bankDetails: {
+                            ...profile.bankDetails!,
+                            ifscCode: e.target.value.toUpperCase(),
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1.5 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                      UPI ID (Optional)
+                    </label>
+                    <input
+                      className={FIELD}
+                      placeholder="e.g. yourname@upi"
+                      value={profile.bankDetails?.upiId || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          bankDetails: {
+                            ...profile.bankDetails!,
+                            upiId: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                    <p className="mt-1.5 text-xs font-bold text-slate-500">
+                      Providing UPI enables faster settlements directly to your
+                      UPI-linked account.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 rounded-2xl bg-blue-500/10 px-4 py-3 ring-1 ring-blue-500/20">
+                  <p className="text-xs font-black text-blue-700 dark:text-blue-300">
+                    🔒 Your bank details are stored securely and only used for
+                    payment settlements after completed bookings.
+                  </p>
+                </div>
+              </div>
+            )}
             {/* Error */}
             {error && (
               <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                 {error}
               </div>
             )}
-
             {/* Save (bottom) */}
             <button
               onClick={saveProfile}
@@ -1198,7 +1315,6 @@ export default function FreelancerProfilePage() {
               )}
             </button>
           </div>
-
           {/* RIGHT: Reviews & tips */}
           <div className="lg:col-span-4">
             <div className="sticky top-24 space-y-4">
@@ -1247,7 +1363,6 @@ export default function FreelancerProfilePage() {
                   </div>
                 )}
               </div>
-
               {/* Tips */}
               <div className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm dark:bg-white dark:text-slate-900">
                 <div className="flex items-start gap-3">

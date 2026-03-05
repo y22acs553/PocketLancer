@@ -23,6 +23,19 @@ const UserSchema = new mongoose.Schema(
       default: "",
     },
 
+    phone: { type: String, trim: true, default: "" },
+    dateOfBirth: { type: Date, default: null },
+
+    // ── Address ──────────────────────────────────────────
+    address: { type: String, trim: true, default: "" },
+    city: { type: String, trim: true, default: "" },
+    state: { type: String, trim: true, default: "" },
+    pincode: { type: String, trim: true, default: "" },
+
+    // ── Notification preferences ─────────────────────────
+    emailNotifications: { type: Boolean, default: true },
+    smsNotifications: { type: Boolean, default: false },
+
     // ✅ Forgot password fields
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },

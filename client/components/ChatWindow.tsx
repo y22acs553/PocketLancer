@@ -1,26 +1,24 @@
 "use client";
-
 import { useEffect, useRef, useState } from "react";
-import { X, Send, Loader2 } from "lucide-react";
+import { X, Send, Loader2, ImagePlus, Trash2 } from "lucide-react";
 import socket from "@/services/socket";
 import api from "@/services/api";
 import { useUser } from "@/context/UserContext";
-
 interface Message {
   _id: string;
   senderId: string;
   receiverId: string;
   text: string;
+  imageUrl?: string;
+  deleted?: boolean;
   createdAt: string;
 }
-
 interface Props {
   freelancerId: string;
   freelancerName: string;
   freelancerAvatar?: string;
   onClose: () => void;
 }
-
 function timeLabel(dateStr: string) {
   const d = new Date(dateStr);
   const now = new Date();
@@ -32,7 +30,6 @@ function timeLabel(dateStr: string) {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
-
 export default function ChatWindow({
   freelancerId,
   freelancerName,
@@ -44,40 +41,37 @@ export default function ChatWindow({
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState("");
+  const [hoveredMsg, setHoveredMsg] = useState<string | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
-
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Load message history
   useEffect(() => {
     if (!freelancerId) return;
     setLoading(true);
-    // ✅ correct path: /message/ not /messages/
     api
       .get(`/message/${freelancerId}`)
       .then((r) => setMessages(r.data.messages || []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [freelancerId]);
-
   // Scroll to bottom
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  // Socket listener for incoming messages
-  // ✅ Use user?._id (string primitive) NOT user (object) — object reference
-  //    changes on every context re-render causing an infinite loop that
-  //    freezes the app and triggers constant Next.js hot-reload ("compiling").
   const userId = user?._id;
+  // Socket listener for incoming messages
   useEffect(() => {
     if (!userId) return;
-
     const handler = (msg: Message) => {
       const isRelevant =
         (msg.senderId?.toString() === freelancerId &&
           msg.receiverId?.toString() === userId) ||
         (msg.senderId?.toString() === userId &&
           msg.receiverId?.toString() === freelancerId);
-
       if (isRelevant) {
         setMessages((prev) => {
           if (prev.some((m) => m._id === msg._id)) return prev;
@@ -85,132 +79,286 @@ export default function ChatWindow({
         });
       }
     };
-
     socket.on("new_message", handler);
     return () => {
       socket.off("new_message", handler);
     };
   }, [userId, freelancerId]);
-
+  // Socket listener for deleted messages
+  useEffect(() => {
+    if (!userId) return;
+    const handler = (data: { _id: string }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m._id === data._id
+            ? { ...m, deleted: true, text: "", imageUrl: "" }
+            : m,
+        ),
+      );
+    };
+    socket.on("message_deleted", handler);
+    return () => {
+      socket.off("message_deleted", handler);
+    };
+  }, [userId]);
+  // Handle image selection
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Only image files are allowed");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Image must be under 5 MB");
+      return;
+    }
+    setSelectedImage(file);
+    setImagePreview(URL.createObjectURL(file));
+    setError("");
+  };
+  const clearImage = () => {
+    setSelectedImage(null);
+    setImagePreview("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
   const handleSend = async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || !userId) return;
-
+    if ((!trimmed && !selectedImage) || sending || !userId) return;
     setSending(true);
     setText("");
-
+    setError("");
     try {
-      // ✅ correct path: /message/ not /messages/
-      const res = await api.post(`/message/${freelancerId}`, { text: trimmed });
+      const formData = new FormData();
+      if (trimmed) formData.append("text", trimmed);
+      if (selectedImage) formData.append("image", selectedImage);
+      const res = await api.post(`/message/${freelancerId}`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
       const sent = res.data.message;
-      // Append for sender immediately (server only emits to receiver)
       setMessages((prev) => {
         if (prev.some((m) => m._id === sent._id)) return prev;
         return [...prev, sent];
       });
-    } catch {
-      setText(trimmed); // restore on failure
+      clearImage();
+    } catch (err: any) {
+      console.error("ChatWindow send error:", err?.response?.data || err);
+      setError(err?.response?.data?.msg || "Failed to send");
+      setText(trimmed);
     } finally {
       setSending(false);
     }
   };
-
+  const handleDelete = async (messageId: string) => {
+    try {
+      await api.delete(`/message/${messageId}`);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m._id === messageId
+            ? { ...m, deleted: true, text: "", imageUrl: "" }
+            : m,
+        ),
+      );
+    } catch (err: any) {
+      console.error("Delete error:", err?.response?.data || err);
+      setError(err?.response?.data?.msg || "Failed to delete");
+    }
+  };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
-
   return (
-    <div
-      className="fixed bottom-24 right-6 z-50 w-80 sm:w-96 rounded-3xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden dark:bg-slate-950 dark:border-slate-800"
-      style={{ maxHeight: "480px" }}
-    >
-      {/* Header */}
-      <div className="flex items-center gap-3 px-5 py-4 border-b dark:border-slate-800 bg-slate-900 dark:bg-slate-800">
-        <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center text-white font-black text-sm flex-shrink-0">
-          {freelancerName?.slice(0, 1).toUpperCase() ?? "?"}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-black text-white truncate">
-            {freelancerName}
-          </p>
-          <p className="text-xs font-bold text-slate-400">Chat</p>
-        </div>
-        <button
-          onClick={onClose}
-          className="rounded-xl p-1.5 text-slate-400 hover:bg-white/10 transition"
+    <>
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90"
+          onClick={() => setLightboxUrl("")}
         >
-          <X size={16} />
-        </button>
-      </div>
-
-      {/* Messages */}
+          <button
+            onClick={() => setLightboxUrl("")}
+            className="absolute top-6 right-6 text-white"
+          >
+            <X size={28} />
+          </button>
+          <img
+            src={lightboxUrl}
+            alt="Full size"
+            className="max-h-[90vh] max-w-[90vw] rounded-xl"
+          />
+        </div>
+      )}
       <div
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
-        style={{ minHeight: 200 }}
+        className="fixed bottom-24 right-6 z-50 w-80 sm:w-96 rounded-3xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden dark:bg-slate-950 dark:border-slate-800"
+        style={{ maxHeight: "520px" }}
       >
-        {loading ? (
-          <div className="flex items-center justify-center h-full text-slate-400">
-            <Loader2 className="animate-spin" size={22} />
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b dark:border-slate-800 bg-slate-900 dark:bg-slate-800">
+          <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center text-white font-black text-sm flex-shrink-0">
+            {freelancerName?.slice(0, 1).toUpperCase() ?? "?"}
           </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-400 py-8">
-            <p className="text-sm font-bold">No messages yet</p>
-            <p className="text-xs">Say hello 👋</p>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-black text-white truncate">
+              {freelancerName}
+            </p>
+            <p className="text-xs font-bold text-slate-400">Chat</p>
           </div>
-        ) : (
-          messages.map((m) => {
-            const isMine = m.senderId?.toString() === userId;
-            return (
-              <div
-                key={m._id}
-                className={`flex ${isMine ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm font-bold leading-snug ${
-                    isMine
-                      ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 rounded-br-sm"
-                      : "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white rounded-bl-sm"
-                  }`}
-                >
-                  <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                  <p className="text-[10px] mt-1 font-bold text-slate-400">
-                    {timeLabel(m.createdAt)}
-                  </p>
-                </div>
-              </div>
-            );
-          })
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {/* Input */}
-      <div className="px-4 py-3 border-t dark:border-slate-800 flex items-end gap-2">
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Type a message…"
-          rows={1}
-          className="flex-1 resize-none rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-white placeholder:text-slate-400"
-          style={{ maxHeight: 96 }}
-          disabled={sending}
-        />
-        <button
-          onClick={handleSend}
-          disabled={!text.trim() || sending}
-          className="h-10 w-10 flex-shrink-0 flex items-center justify-center rounded-2xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-white dark:text-slate-900 transition"
+          <button
+            onClick={onClose}
+            className="rounded-xl p-1.5 text-slate-400 hover:bg-white/10 transition"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        {/* Messages */}
+        <div
+          className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+          style={{ minHeight: 200 }}
         >
-          {sending ? (
-            <Loader2 size={16} className="animate-spin" />
+          {loading ? (
+            <div className="flex items-center justify-center h-full text-slate-400">
+              <Loader2 className="animate-spin" size={22} />
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-400 py-8">
+              <p className="text-sm font-bold">No messages yet</p>
+              <p className="text-xs">Say hello 👋</p>
+            </div>
           ) : (
-            <Send size={16} />
+            messages.map((m) => {
+              const isMine = m.senderId?.toString() === userId;
+              if (m.deleted) {
+                return (
+                  <div
+                    key={m._id}
+                    className={`flex ${isMine ? "justify-end" : "justify-start"}`}
+                  >
+                    <div className="max-w-[75%] rounded-2xl px-4 py-2.5 bg-slate-50 dark:bg-slate-900">
+                      <p className="text-xs italic text-slate-400">
+                        🚫 This message was deleted
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={m._id}
+                  className={`flex ${isMine ? "justify-end" : "justify-start"} group`}
+                  onMouseEnter={() => setHoveredMsg(m._id)}
+                  onMouseLeave={() => setHoveredMsg(null)}
+                >
+                  <div className="relative max-w-[75%]">
+                    <div
+                      className={`rounded-2xl px-4 py-2.5 text-sm font-bold leading-snug ${
+                        isMine
+                          ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 rounded-br-sm"
+                          : "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white rounded-bl-sm"
+                      }`}
+                    >
+                      {m.imageUrl && (
+                        <img
+                          src={m.imageUrl}
+                          alt="attachment"
+                          className="rounded-xl mb-2 max-h-48 w-full object-cover cursor-pointer hover:opacity-90 transition"
+                          onClick={() => setLightboxUrl(m.imageUrl!)}
+                        />
+                      )}
+                      {m.text && (
+                        <p className="whitespace-pre-wrap break-words">
+                          {m.text}
+                        </p>
+                      )}
+                      <p className="text-[10px] mt-1 font-bold text-slate-400">
+                        {timeLabel(m.createdAt)}
+                      </p>
+                    </div>
+                    {/* Delete button — only for own messages */}
+                    {isMine && hoveredMsg === m._id && (
+                      <button
+                        onClick={() => handleDelete(m._id)}
+                        className="absolute -left-8 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center rounded-full bg-red-100 text-red-500 hover:bg-red-200 transition dark:bg-red-900/30 dark:text-red-400"
+                        title="Delete message"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
           )}
-        </button>
+          <div ref={bottomRef} />
+        </div>
+        {/* Error */}
+        {error && (
+          <div className="px-4 py-2 text-xs font-bold text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400">
+            {error}
+          </div>
+        )}
+        {/* Image Preview */}
+        {imagePreview && (
+          <div className="px-4 py-2 border-t dark:border-slate-800">
+            <div className="relative inline-block">
+              <img
+                src={imagePreview}
+                alt="Preview"
+                className="h-16 w-16 rounded-xl object-cover ring-1 ring-slate-200 dark:ring-slate-700"
+              />
+              <button
+                onClick={clearImage}
+                className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-red-500 text-white text-xs"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Input */}
+        <div className="px-4 py-3 border-t dark:border-slate-800 flex items-end gap-2">
+          {/* Hidden file input */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept="image/*"
+            className="hidden"
+            onChange={handleImageSelect}
+          />
+          {/* Attachment button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending}
+            className="h-10 w-10 flex-shrink-0 flex items-center justify-center rounded-2xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-40 dark:border-slate-800 dark:hover:bg-slate-900 dark:text-slate-400 transition"
+            title="Attach image"
+          >
+            <ImagePlus size={16} />
+          </button>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type a message…"
+            rows={1}
+            className="flex-1 resize-none rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-white placeholder:text-slate-400"
+            style={{ maxHeight: 96 }}
+            disabled={sending}
+          />
+          <button
+            onClick={handleSend}
+            disabled={(!text.trim() && !selectedImage) || sending}
+            className="h-10 w-10 flex-shrink-0 flex items-center justify-center rounded-2xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-white dark:text-slate-900 transition"
+          >
+            {sending ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Send size={16} />
+            )}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

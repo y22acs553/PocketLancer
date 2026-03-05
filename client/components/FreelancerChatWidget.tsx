@@ -1,5 +1,4 @@
 "use client";
-
 /**
  * FreelancerChatWidget — Floating chat button shown on all pages.
  *
@@ -9,14 +8,12 @@
  * 3. No API calls block navigation or page render
  * 4. Badge only increments for RECEIVER, never for SENDER
  */
-
 import { useEffect, useRef, useState } from "react";
-import { MessageCircle, X, ChevronDown } from "lucide-react";
+import { MessageCircle, X, ChevronDown, Trash2 } from "lucide-react";
 import socket from "@/services/socket";
 import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
 import ChatWindow from "./ChatWindow";
-
 interface Conversation {
   conversationId: string;
   partner: { _id: string; name: string; profilePic?: string } | null;
@@ -29,7 +26,6 @@ interface Conversation {
   };
   unreadCount: number;
 }
-
 export default function FreelancerChatWidget() {
   const { user } = useUser();
   const [open, setOpen] = useState(false);
@@ -42,7 +38,6 @@ export default function FreelancerChatWidget() {
   } | null>(null);
   const [loadingConvos, setLoadingConvos] = useState(false);
   const widgetRef = useRef<HTMLDivElement>(null);
-
   // Listen for "open-chat" events dispatched by profile pages
   // This avoids importing ChatWindow or socket in every page
   useEffect(() => {
@@ -56,7 +51,6 @@ export default function FreelancerChatWidget() {
     window.addEventListener("open-chat", handler);
     return () => window.removeEventListener("open-chat", handler);
   }, []);
-
   // Load unread count once after login — non-blocking
   useEffect(() => {
     if (!user?._id) return;
@@ -66,25 +60,21 @@ export default function FreelancerChatWidget() {
       .then((r) => setTotalUnread(r.data.count || 0))
       .catch(() => {}); // silently ignore — never crash the app
   }, [user?._id]);
-
   // Socket: listen for new messages — only count if WE are the receiver
   const userId = user?._id;
   useEffect(() => {
     if (!userId) return;
-
     const handler = (msg: any) => {
       // ✅ Only increment badge for receiver, NEVER for sender
       if (msg.receiverId?.toString() === userId) {
         setTotalUnread((n) => n + 1);
       }
     };
-
     socket.on("new_message", handler);
     return () => {
       socket.off("new_message", handler);
     };
   }, [userId]);
-
   // Load conversations when panel opens
   useEffect(() => {
     if (!open || !user?._id) return;
@@ -96,7 +86,39 @@ export default function FreelancerChatWidget() {
       .catch(() => {})
       .finally(() => setLoadingConvos(false));
   }, [open, user?._id]);
-
+  // Listen for conversation_deleted from the other user
+  useEffect(() => {
+    if (!userId) return;
+    const handler = (data: { conversationId: string }) => {
+      setConversations((prev) =>
+        prev.filter((c) => c.conversationId !== data.conversationId),
+      );
+    };
+    socket.on("conversation_deleted", handler);
+    return () => {
+      socket.off("conversation_deleted", handler);
+    };
+  }, [userId]);
+  const handleDeleteConversation = async (
+    e: React.MouseEvent,
+    conv: Conversation,
+  ) => {
+    e.stopPropagation(); // don't open the chat
+    if (!conv.partner) return;
+    const ok = window.confirm(
+      `Delete entire conversation with ${conv.partner.name}? This cannot be undone.`,
+    );
+    if (!ok) return;
+    try {
+      await api.delete(`/message/conversation/${conv.partner._id}`);
+      setConversations((prev) =>
+        prev.filter((c) => c.conversationId !== conv.conversationId),
+      );
+      setTotalUnread((n) => Math.max(0, n - conv.unreadCount));
+    } catch (err) {
+      console.error("Delete conversation error:", err);
+    }
+  };
   // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -107,7 +129,6 @@ export default function FreelancerChatWidget() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
-
   const handleOpenConversation = (conv: Conversation) => {
     if (!conv.partner) return;
     setActiveChat({
@@ -124,10 +145,8 @@ export default function FreelancerChatWidget() {
     );
     setTotalUnread((n) => Math.max(0, n - conv.unreadCount));
   };
-
   // Don't render anything if user is not logged in
   if (!user) return null;
-
   return (
     <>
       {/* Active chat window */}
@@ -139,7 +158,6 @@ export default function FreelancerChatWidget() {
           onClose={() => setActiveChat(null)}
         />
       )}
-
       {/* Floating button + panel */}
       <div
         ref={widgetRef}
@@ -159,7 +177,6 @@ export default function FreelancerChatWidget() {
                 <X size={15} />
               </button>
             </div>
-
             <div className="max-h-80 overflow-y-auto">
               {loadingConvos ? (
                 <div className="flex items-center justify-center py-8 text-slate-400 text-sm font-bold">
@@ -175,10 +192,10 @@ export default function FreelancerChatWidget() {
                 </div>
               ) : (
                 conversations.map((conv) => (
-                  <button
+                  <div
                     key={conv.conversationId}
                     onClick={() => handleOpenConversation(conv)}
-                    className="w-full flex items-center gap-3 px-5 py-3 border-b last:border-0 hover:bg-slate-50 dark:hover:bg-slate-900 dark:border-slate-800/60 text-left transition"
+                    className="group w-full flex items-center gap-3 px-5 py-3 border-b last:border-0 hover:bg-slate-50 dark:hover:bg-slate-900 dark:border-slate-800/60 text-left transition cursor-pointer"
                   >
                     <div className="h-9 w-9 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center font-black text-sm flex-shrink-0">
                       {conv.partner?.name?.slice(0, 1).toUpperCase() ?? "?"}
@@ -188,11 +205,20 @@ export default function FreelancerChatWidget() {
                         <p className="text-sm font-black text-slate-900 dark:text-white truncate">
                           {conv.partner?.name ?? "Unknown"}
                         </p>
-                        {conv.unreadCount > 0 && (
-                          <span className="flex-shrink-0 h-5 min-w-[20px] px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
-                            {conv.unreadCount}
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {conv.unreadCount > 0 && (
+                            <span className="h-5 min-w-[20px] px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
+                              {conv.unreadCount}
+                            </span>
+                          )}
+                          <button
+                            onClick={(e) => handleDeleteConversation(e, conv)}
+                            className="h-6 w-6 rounded-lg flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 opacity-0 group-hover:opacity-100 transition-all"
+                            title="Delete conversation"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </div>
                       <p className="text-xs font-bold text-slate-400 truncate mt-0.5">
                         {conv.lastMessage?.senderId?.toString() === user._id
@@ -200,13 +226,12 @@ export default function FreelancerChatWidget() {
                           : (conv.lastMessage?.text ?? "")}
                       </p>
                     </div>
-                  </button>
+                  </div>
                 ))
               )}
             </div>
           </div>
         )}
-
         {/* FAB */}
         <button
           onClick={() => setOpen((s) => !s)}

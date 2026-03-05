@@ -59,7 +59,9 @@ const allowedOrigins = [
   "http://localhost:3000",
   "https://www.pocketlancer.org",
   "https://pocketlancer.org",
+  "https://pocket-lancer.vercel.app",
 ];
+
 app.use(
   cors({
     origin: function (origin, callback) {
