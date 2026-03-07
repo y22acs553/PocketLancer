@@ -127,9 +127,7 @@ function NotifList({
   onClose: () => void;
 }) {
   return (
-    // ✅ flex-col so sticky header + scrollable list work together
     <div className="flex flex-col">
-      {/* ✅ sticky top-0 ensures "Mark all read" is always visible even when list is scrolled */}
       <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-white">
         <div>
           <p className="font-black text-slate-900">Notifications</p>
@@ -158,7 +156,6 @@ function NotifList({
         </div>
       </div>
 
-      {/* ✅ Scrollable list — capped so it never overflows viewport */}
       <div className="overflow-y-auto overscroll-contain max-h-[min(380px,50dvh)]">
         {notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 gap-3">
@@ -343,9 +340,6 @@ export default function DashboardHeader() {
 
   const handleLogout = async () => {
     closeAllMenus();
-    // logout() in UserContext now owns the redirect and socket teardown.
-    // Do NOT call window.location.href here — it would race with the
-    // redirect inside logout() and could navigate before the cookie is cleared.
     await logout();
   };
 
@@ -399,11 +393,19 @@ export default function DashboardHeader() {
           icon: <Briefcase size={18} />,
         },
       ];
+    // ✅ FIX: Added "Search" to client bottom nav — was missing, causing the
+    // Search tab to not appear on Android and the field workers search to be
+    // inaccessible from the mobile nav bar.
     return [
       {
         label: "Dashboard",
         href: "/dashboard/client",
         icon: <LayoutDashboard size={18} />,
+      },
+      {
+        label: "Search",
+        href: "/search",
+        icon: <SearchIcon size={18} />,
       },
       {
         label: "Bookings",

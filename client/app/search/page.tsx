@@ -103,11 +103,25 @@ function SearchInner() {
       }
       const res = await api.get("/freelancers/search", { params });
       setFreelancers(applySort(res.data.freelancers || []));
-    } catch {
+    } catch (err: any) {
+      // ✅ FIX: Distinguish location errors from API/network errors so we don't
+      // show a misleading "allow location access" message when the real problem
+      // is a failed API call or network issue (common on Android with Render).
+      const msg: string = err?.message ?? "";
+      const isLocationError =
+        cat === "field" &&
+        (msg.toLowerCase().includes("location") ||
+          msg.toLowerCase().includes("gps") ||
+          msg.toLowerCase().includes("permission") ||
+          msg.toLowerCase().includes("denied") ||
+          msg.toLowerCase().includes("timed out"));
+
       setError(
-        cat === "field"
+        isLocationError
           ? "Unable to get location. Please allow location access and try again."
-          : "Unable to fetch freelancers.",
+          : cat === "field"
+            ? `Search failed: ${msg || "Unable to reach the server. Check your connection."}`
+            : "Unable to fetch freelancers. Check your connection and try again.",
       );
       setFreelancers([]);
     } finally {
