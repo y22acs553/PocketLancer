@@ -66,6 +66,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     try {
       // 1. Tell the server to clear the httpOnly cookie
       await api.post("/auth/logout");
+      await api.delete("/notifications/register-token").catch(() => {});
     } catch {
       // Even if the server call fails, we still clean up client-side
     } finally {
