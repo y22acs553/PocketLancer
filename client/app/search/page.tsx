@@ -114,12 +114,26 @@ function SearchInner() {
           msg.toLowerCase().includes("denied") ||
           msg.toLowerCase().includes("timed out"));
 
+      const isPermissionDenied =
+        cat === "field" &&
+        (msg.toLowerCase().includes("denied") ||
+          msg.toLowerCase().includes("permission"));
+
+      const isTimeout =
+        cat === "field" &&
+        (msg.toLowerCase().includes("timed out") ||
+          msg.toLowerCase().includes("gps"));
+
       setError(
-        isLocationError
-          ? "Unable to get location. Please allow location access and try again."
-          : cat === "field"
-            ? `Search failed: ${msg || "Unable to reach the server. Check your connection."}`
-            : "Unable to fetch freelancers. Check your connection and try again.",
+        isPermissionDenied
+          ? "Location permission denied. Please enable it in Settings → App → Permissions."
+          : isTimeout
+            ? "GPS timed out. Please step outside or into open air and try again."
+            : isLocationError
+              ? "Unable to get location. Please try again."
+              : cat === "field"
+                ? `Search failed: ${msg || "Unable to reach the server."}`
+                : "Unable to fetch freelancers. Check your connection and try again.",
       );
       setFreelancers([]);
     } finally {
