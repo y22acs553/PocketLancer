@@ -558,9 +558,9 @@ router.patch(
           .json({ msg: "Booking locked due to active dispute" });
 
       if (status === "completed" || status === "in_progress") {
-        const bookingDate =
-          booking.startTime || new Date(booking.preferredDate);
-        if (bookingDate > new Date())
+        const bookingDateStr = booking.preferredDate; // "2026-03-07"
+        const todayStr = new Date().toISOString().split("T")[0]; // "2026-03-07"
+        if (bookingDateStr > todayStr)
           return res
             .status(400)
             .json({ msg: "The work date has not arrived yet." });
