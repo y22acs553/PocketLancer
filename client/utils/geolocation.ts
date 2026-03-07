@@ -8,9 +8,38 @@ function isNative(): boolean {
 }
 
 /**
- * Extracts lat/lng from a Capacitor GeolocationPosition, throwing a clear
- * error if coords are undefined (happens on some Android devices where
- * getCurrentPosition resolves but returns a malformed object).
+ * Normalises any Capacitor/browser GeolocationPositionError into a typed
+ * error with a predictable prefix. Capacitor throws a PositionError object
+ * with a numeric `code` (1=PERMISSION_DENIED 2=POSITION_UNAVAILABLE 3=TIMEOUT)
+ * but the `.message` string varies wildly by Android version and vendor —
+ * so we always key off the code, never the string.
+ */
+function normalisePositionError(err: any): Error {
+  const code: number | undefined = err?.code;
+
+  if (code === 1)
+    return new Error(
+      "PERMISSION_DENIED: Location permission denied. Please enable it in Settings → App → Permissions.",
+    );
+  if (code === 2)
+    return new Error(
+      "POSITION_UNAVAILABLE: Location unavailable. Please ensure GPS and Location Services are enabled on your device.",
+    );
+  if (code === 3)
+    return new Error(
+      "TIMEOUT: GPS timed out — please step outside or into open air and try again.",
+    );
+
+  // Re-throw anything that is already one of our own typed errors
+  if (err instanceof Error) return err;
+
+  return new Error(String(err?.message ?? err ?? "Unknown location error"));
+}
+
+/**
+ * Extracts lat/lng from a Capacitor GeolocationPosition, throwing a typed
+ * error if coords are undefined — happens on some Android devices where
+ * getCurrentPosition resolves successfully but with a malformed object.
  */
 function extractCoords(pos: any): { latitude: number; longitude: number } {
   const lat = pos?.coords?.latitude;
@@ -21,7 +50,9 @@ function extractCoords(pos: any): { latitude: number; longitude: number } {
     isNaN(lat) ||
     isNaN(lng)
   ) {
-    throw new Error("GPS returned an invalid position — please try again.");
+    throw new Error(
+      "POSITION_UNAVAILABLE: GPS returned an invalid position — please try again.",
+    );
   }
   return { latitude: lat, longitude: lng };
 }
@@ -43,64 +74,72 @@ export async function getCurrentLocation(): Promise<{
 
     const perm = await Geolocation.requestPermissions();
 
-    // "prompt" = Android will show the dialog on the next call — not a denial.
-    // Only hard-fail on "denied".
+    // "prompt" means Android will show the dialog on the next call — not a denial.
     if (perm.location === "denied") {
       throw new Error(
-        "Location permission denied. Please enable it in Settings → App → Permissions.",
+        "PERMISSION_DENIED: Location permission denied. Please enable it in Settings → App → Permissions.",
       );
     }
 
     // ── Step 1: fast coarse fix (cell tower / WiFi, usually <2 s) ──
-    // maximumAge:60000 allows a recently cached position so repeat searches
-    // are instant.
     try {
       const coarse = await Promise.race([
         Geolocation.getCurrentPosition({
           enableHighAccuracy: false,
           timeout: 8000,
           maximumAge: 60000,
+        }).catch((e) => {
+          throw normalisePositionError(e);
         }),
         new Promise<never>((_, reject) =>
           setTimeout(
-            () => reject(new Error("Coarse location timed out")),
+            () => reject(new Error("TIMEOUT: Coarse location timed out.")),
             10000,
           ),
         ),
       ]);
-      // ✅ Null-check coords — some Android devices resolve with undefined coords
       return extractCoords(coarse);
     } catch {
       // Coarse failed — fall through to high-accuracy GPS
     }
 
     // ── Step 2: high-accuracy GPS fallback ──────────────────────────
-    // Cold GPS start needs up to 30 s — give it proper room.
-    const precise = await Promise.race([
-      Geolocation.getCurrentPosition({
-        enableHighAccuracy: true,
-        timeout: 25000,
-        maximumAge: 0,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error("GPS timed out — please step outside or try again."),
-            ),
-          28000,
+    try {
+      const precise = await Promise.race([
+        Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 25000,
+          maximumAge: 0,
+        }).catch((e) => {
+          throw normalisePositionError(e);
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "TIMEOUT: GPS timed out — please step outside or try again.",
+                ),
+              ),
+            28000,
+          ),
         ),
-      ),
-    ]);
-
-    // ✅ Null-check here too
-    return extractCoords(precise);
+      ]);
+      return extractCoords(precise);
+    } catch (err: any) {
+      // Re-normalise in case the inner .catch() didn't run (e.g. our own setTimeout)
+      throw normalisePositionError(err);
+    }
   }
 
   // ── Web / browser fallback ────────────────────────────────────────
   return new Promise((resolve, reject) => {
     if (!navigator?.geolocation) {
-      reject(new Error("Geolocation is not supported by this browser."));
+      reject(
+        new Error(
+          "POSITION_UNAVAILABLE: Geolocation is not supported by this browser.",
+        ),
+      );
       return;
     }
     navigator.geolocation.getCurrentPosition(
@@ -111,14 +150,7 @@ export async function getCurrentLocation(): Promise<{
           reject(e);
         }
       },
-      (err) => {
-        const msgs: Record<number, string> = {
-          1: "Location permission denied by browser.",
-          2: "Location unavailable — check your connection or GPS.",
-          3: "Location request timed out.",
-        };
-        reject(new Error(msgs[err.code] ?? err.message));
-      },
+      (err) => reject(normalisePositionError(err)),
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
     );
   });

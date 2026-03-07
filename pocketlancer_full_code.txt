@@ -11111,12 +11111,26 @@ function SearchInner() {
           msg.toLowerCase().includes("denied") ||
           msg.toLowerCase().includes("timed out"));
 
+      const isPermissionDenied =
+        cat === "field" &&
+        (msg.toLowerCase().includes("denied") ||
+          msg.toLowerCase().includes("permission"));
+
+      const isTimeout =
+        cat === "field" &&
+        (msg.toLowerCase().includes("timed out") ||
+          msg.toLowerCase().includes("gps"));
+
       setError(
-        isLocationError
-          ? "Unable to get location. Please allow location access and try again."
-          : cat === "field"
-            ? `Search failed: ${msg || "Unable to reach the server. Check your connection."}`
-            : "Unable to fetch freelancers. Check your connection and try again.",
+        isPermissionDenied
+          ? "Location permission denied. Please enable it in Settings → App → Permissions."
+          : isTimeout
+            ? "GPS timed out. Please step outside or into open air and try again."
+            : isLocationError
+              ? "Unable to get location. Please try again."
+              : cat === "field"
+                ? `Search failed: ${msg || "Unable to reach the server."}`
+                : "Unable to fetch freelancers. Check your connection and try again.",
       );
       setFreelancers([]);
     } finally {
@@ -16598,10 +16612,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination:
-          process.env.NODE_ENV === "production"
-            ? "https://pocketlancer.onrender.com/api/:path*"
-            : "http://localhost:5001/api/:path*",
+        destination: "https://pocketlancer.onrender.com/api/:path*",
       },
     ];
   },
@@ -19145,9 +19156,9 @@ router.patch(
           .json({ msg: "Booking locked due to active dispute" });
 
       if (status === "completed" || status === "in_progress") {
-        const bookingDate =
-          booking.startTime || new Date(booking.preferredDate);
-        if (bookingDate > new Date())
+        const bookingDateStr = booking.preferredDate; // "2026-03-07"
+        const todayStr = new Date().toISOString().split("T")[0]; // "2026-03-07"
+        if (bookingDateStr > todayStr)
           return res
             .status(400)
             .json({ msg: "The work date has not arrived yet." });

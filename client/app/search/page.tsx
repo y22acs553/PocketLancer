@@ -104,8 +104,24 @@ function SearchInner() {
       const res = await api.get("/freelancers/search", { params });
       setFreelancers(applySort(res.data.freelancers || []));
     } catch (err: any) {
-      // ✅ Distinguish GPS/location errors from API/network errors
       const msg: string = err?.message ?? "";
+      // geolocation.ts prefixes all location errors with a type token
+      const setLocationError = () => {
+        if (msg.startsWith("PERMISSION_DENIED"))
+          return "Location permission denied. Please enable it in Settings → App → Permissions.";
+        if (msg.startsWith("TIMEOUT"))
+          return "GPS timed out. Please step outside or into open air and try again.";
+        if (msg.startsWith("POSITION_UNAVAILABLE"))
+          return "Location unavailable. Please ensure GPS and Location Services are turned on in your device settings.";
+        return `Search failed: ${msg || "Unable to reach the server."}`;
+      };
+
+      setError(
+        cat === "field"
+          ? setLocationError()
+          : "Unable to fetch freelancers. Check your connection and try again.",
+      );
+      setFreelancers([]);
       const isLocationError =
         cat === "field" &&
         (msg.toLowerCase().includes("location") ||
