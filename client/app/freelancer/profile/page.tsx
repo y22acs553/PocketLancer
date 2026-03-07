@@ -78,6 +78,8 @@ type Profile = {
   bankDetails?: BankDetails;
   dateOfBirth?: string;
   phone?: string;
+  isVisible?: boolean;
+  username?: string | null;
 };
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -139,6 +141,17 @@ export default function FreelancerProfilePage() {
             : "",
           phone: loaded?.user?.phone || user?.phone || "",
         });
+        const toggleVisibility = async () => {
+          if (!profile) return;
+          const newVal = !profile.isVisible;
+          setProfile((p) => (p ? { ...p, isVisible: newVal } : p));
+          try {
+            await api.put("/freelancers/me", { ...profile, isVisible: newVal });
+          } catch {
+            setProfile((p) => (p ? { ...p, isVisible: !newVal } : p));
+          }
+        };
+
         const hasCoords = loaded?.latitude != null && loaded?.longitude != null;
         setLocationStatus(hasCoords ? "ready" : "idle");
       })
@@ -187,7 +200,7 @@ export default function FreelancerProfilePage() {
       alert("Profile picture must be smaller than 5MB.");
       return;
     }
-    
+
     try {
       setUploadingPic(true);
       const form = new FormData();
@@ -383,6 +396,17 @@ export default function FreelancerProfilePage() {
       </div>
     );
   }
+  const toggleVisibility = async () => {
+    if (!profile) return;
+    const newVal = !profile.isVisible;
+    setProfile((p) => (p ? { ...p, isVisible: newVal } : p));
+    try {
+      await api.put("/freelancers/me", { ...profile, isVisible: newVal });
+    } catch {
+      setProfile((p) => (p ? { ...p, isVisible: !newVal } : p));
+    }
+  };
+
   const hasCoords =
     profile.category === "digital" ||
     (profile.latitude != null && profile.longitude != null);
@@ -450,6 +474,22 @@ export default function FreelancerProfilePage() {
               >
                 <Eye size={16} /> Preview Public Profile
               </button>
+              {/* Visibility Toggle */}
+              <button
+                onClick={toggleVisibility}
+                className={[
+                  "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-sm font-black transition border",
+                  profile.isVisible !== false
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+                    : "border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200 dark:border-white/10 dark:bg-slate-800 dark:text-slate-300",
+                ].join(" ")}
+              >
+                <Eye size={16} />
+                {profile.isVisible !== false
+                  ? "Visible to clients"
+                  : "Hidden from search"}
+              </button>
+
               <button
                 onClick={saveProfile}
                 disabled={saving || !canSave}
@@ -1164,51 +1204,52 @@ export default function FreelancerProfilePage() {
             </div>
             {/* Location (field workers only) */}
             {profile.category === "field" && (
-            <div className={CARD}>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-black text-slate-900 dark:text-white">
-                    Location (Required)
-                  </h3>
-                  <p className="mt-1 text-sm font-bold text-slate-500">
-                    Required for field workers — clients find you by distance.
-                  </p>
+              <div className={CARD}>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-white">
+                      Location (Required)
+                    </h3>
+                    <p className="mt-1 text-sm font-bold text-slate-500">
+                      Required for field workers — clients find you by distance.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchLocation}
+                    disabled={locationStatus === "fetching"}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {locationStatus === "fetching" ? (
+                      <>
+                        <Loader2 className="animate-spin" size={16} />{" "}
+                        Detecting…
+                      </>
+                    ) : (
+                      <>
+                        <MapPin size={16} />{" "}
+                        {locationStatus === "ready" ? "Update" : "Enable"}
+                      </>
+                    )}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={fetchLocation}
-                  disabled={locationStatus === "fetching"}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
-                >
-                  {locationStatus === "fetching" ? (
-                    <>
-                      <Loader2 className="animate-spin" size={16} /> Detecting…
-                    </>
-                  ) : (
-                    <>
-                      <MapPin size={16} />{" "}
-                      {locationStatus === "ready" ? "Update" : "Enable"}
-                    </>
-                  )}
-                </button>
+                {locationStatus === "ready" || hasCoords ? (
+                  <div className="mt-4 rounded-2xl bg-emerald-500/10 px-4 py-3 ring-1 ring-emerald-500/20">
+                    <p className="text-sm font-black text-emerald-800 dark:text-emerald-200">
+                      📍 {profile.city || "Location detected"}
+                      {profile.country ? `, ${profile.country}` : ""}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-2xl bg-slate-100 px-4 py-3 dark:bg-slate-900">
+                    <p className="text-sm font-bold text-slate-500">
+                      {locationStatus === "error"
+                        ? "❌ Location access denied. Please allow it in browser settings."
+                        : "Location not set yet."}
+                    </p>
+                  </div>
+                )}
               </div>
-              {locationStatus === "ready" || hasCoords ? (
-                <div className="mt-4 rounded-2xl bg-emerald-500/10 px-4 py-3 ring-1 ring-emerald-500/20">
-                  <p className="text-sm font-black text-emerald-800 dark:text-emerald-200">
-                    📍 {profile.city || "Location detected"}
-                    {profile.country ? `, ${profile.country}` : ""}
-                  </p>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-2xl bg-slate-100 px-4 py-3 dark:bg-slate-900">
-                  <p className="text-sm font-bold text-slate-500">
-                    {locationStatus === "error"
-                      ? "❌ Location access denied. Please allow it in browser settings."
-                      : "Location not set yet."}
-                  </p>
-                </div>
-              )}
-            </div>
             )}
             {/* Bank Details (Digital only) */}
             {profile.category === "digital" && (
@@ -1408,6 +1449,27 @@ export default function FreelancerProfilePage() {
                   </div>
                 )}
               </div>
+              {/* Share URL card — shown if username exists */}
+              {user?.username && (
+                <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-950">
+                  <p className="text-xs font-black uppercase tracking-widest text-slate-400">
+                    Your Profile URL
+                  </p>
+                  <p className="mt-2 break-all rounded-xl bg-slate-50 px-3 py-2 text-xs font-black text-blue-700 dark:bg-slate-900 dark:text-blue-300">
+                    pocketlancer.com/f/{user.username}
+                  </p>
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}/f/${user.username}`;
+                      navigator.clipboard.writeText(url);
+                    }}
+                    className="mt-3 w-full rounded-2xl border border-slate-200 py-2.5 text-xs font-black text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5 transition"
+                  >
+                    Copy link
+                  </button>
+                </div>
+              )}
+
               {/* Tips */}
               <div className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm dark:bg-white dark:text-slate-900">
                 <div className="flex items-start gap-3">

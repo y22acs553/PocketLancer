@@ -16,8 +16,7 @@ import {
   IndianRupee,
   Clock,
   AlertTriangle,
-  Filter,
-  Send,
+  Wrench,
 } from "lucide-react";
 
 interface Evidence {
@@ -37,6 +36,7 @@ interface Dispute {
   bookingId: {
     _id: string;
     serviceType: string;
+    serviceCategory: "digital" | "field";
     agreedAmount?: number;
     paymentStatus?: string;
     status: string;
@@ -45,24 +45,54 @@ interface Dispute {
   };
 }
 
-const RESOLUTION_OPTIONS = [
+// ── Resolution option sets ─────────────────────────────────────────
+
+const DIGITAL_OPTIONS = [
   {
     value: "refund_to_client",
     label: "Refund to Client",
-    desc: "Issue full escrow refund to client",
+    desc: "Issue full escrow refund. Freelancer −10 honor.",
     color: "bg-emerald-600 hover:bg-emerald-700",
+    icon: "💸",
   },
   {
     value: "release_to_freelancer",
     label: "Release to Freelancer",
-    desc: "Release escrow to freelancer",
+    desc: "Release escrow to freelancer. Client −10 honor.",
     color: "bg-blue-600 hover:bg-blue-700",
+    icon: "✅",
   },
   {
     value: "split",
     label: "50/50 Split",
-    desc: "Split escrow equally between both",
+    desc: "Split escrow equally. Both −5 honor.",
     color: "bg-purple-600 hover:bg-purple-700",
+    icon: "⚖️",
+  },
+];
+
+// Field bookings have no escrow — resolutions affect honor score only
+const FIELD_OPTIONS = [
+  {
+    value: "favour_client",
+    label: "Favour Client",
+    desc: "Freelancer was at fault. Freelancer −10 honor score.",
+    color: "bg-rose-600 hover:bg-rose-700",
+    icon: "🙋",
+  },
+  {
+    value: "favour_freelancer",
+    label: "Favour Freelancer",
+    desc: "Client was at fault. Client −10 honor score.",
+    color: "bg-blue-600 hover:bg-blue-700",
+    icon: "🔧",
+  },
+  {
+    value: "both_at_fault",
+    label: "Both at Fault",
+    desc: "Shared responsibility. Both parties −5 honor score.",
+    color: "bg-amber-600 hover:bg-amber-700",
+    icon: "⚖️",
   },
 ];
 
@@ -88,7 +118,7 @@ function DisputeCard({
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(""), 3000);
+    setTimeout(() => setToast(""), 3500);
   };
 
   const markUnderReview = async () => {
@@ -128,6 +158,10 @@ function DisputeCard({
 
   const st = STATUS_STYLES[dispute.status] || STATUS_STYLES.open;
   const booking = dispute.bookingId;
+  const isField = booking?.serviceCategory === "field";
+
+  // Pick the right resolution options based on booking category
+  const resolutionOptions = isField ? FIELD_OPTIONS : DIGITAL_OPTIONS;
 
   return (
     <div
@@ -149,6 +183,19 @@ function DisputeCard({
               >
                 {dispute.status.replace("_", " ")}
               </span>
+
+              {/* Field / Digital badge */}
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs font-black uppercase tracking-widest flex items-center gap-1 ${
+                  isField
+                    ? "bg-orange-100 text-orange-700"
+                    : "bg-violet-100 text-violet-700"
+                }`}
+              >
+                {isField ? <Wrench size={10} /> : <IndianRupee size={10} />}
+                {isField ? "Field" : "Digital"}
+              </span>
+
               <span className="text-xs font-mono text-slate-400">
                 {dispute._id.slice(-8)}
               </span>
@@ -186,7 +233,8 @@ function DisputeCard({
           </div>
 
           <div className="flex flex-col gap-2 items-end flex-shrink-0">
-            {booking?.agreedAmount ? (
+            {/* Show booking value for digital only */}
+            {!isField && booking?.agreedAmount ? (
               <div className="text-right">
                 <p className="text-xs font-bold text-slate-400">
                   Booking value
@@ -198,6 +246,12 @@ function DisputeCard({
                 <p className="text-xs font-bold text-slate-400 capitalize">
                   {booking.paymentStatus?.replace("_", " ")}
                 </p>
+              </div>
+            ) : isField ? (
+              <div className="text-right">
+                <span className="text-xs font-bold rounded-xl bg-orange-50 dark:bg-orange-950/30 text-orange-600 px-3 py-1.5">
+                  No payment involved
+                </span>
               </div>
             ) : null}
             <a
@@ -307,18 +361,27 @@ function DisputeCard({
           {/* Resolution options */}
           {dispute.status !== "resolved" ? (
             <div>
-              <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">
+              <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1">
                 Resolution Action
               </p>
+              {isField && (
+                <p className="text-xs font-bold text-orange-600 dark:text-orange-400 mb-3 flex items-center gap-1.5">
+                  <Wrench size={11} />
+                  Field booking — no payment involved. Resolutions affect honor
+                  scores only.
+                </p>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                {RESOLUTION_OPTIONS.map((opt) => (
+                {resolutionOptions.map((opt) => (
                   <button
                     key={opt.value}
                     onClick={() => resolve(opt.value)}
                     disabled={!!resolving}
                     className={`${opt.color} text-white rounded-2xl p-4 text-left transition disabled:opacity-50`}
                   >
-                    <p className="font-black text-sm">{opt.label}</p>
+                    <p className="font-black text-sm">
+                      {opt.icon} {opt.label}
+                    </p>
                     <p className="text-xs opacity-80 mt-0.5">{opt.desc}</p>
                     {resolving === opt.value && (
                       <Loader2 size={14} className="animate-spin mt-2" />
@@ -414,12 +477,20 @@ export default function AdminDisputesPage() {
             <button
               key={f.key}
               onClick={() => setStatusFilter(f.key)}
-              className={`rounded-2xl px-4 py-2 text-sm font-black transition ${statusFilter === f.key ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800"}`}
+              className={`rounded-2xl px-4 py-2 text-sm font-black transition ${
+                statusFilter === f.key
+                  ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                  : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800"
+              }`}
             >
               {f.label}{" "}
               {f.count > 0 && (
                 <span
-                  className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs ${statusFilter === f.key ? "bg-white/20" : "bg-slate-100 dark:bg-slate-700"}`}
+                  className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs ${
+                    statusFilter === f.key
+                      ? "bg-white/20"
+                      : "bg-slate-100 dark:bg-slate-700"
+                  }`}
                 >
                   {f.count}
                 </span>

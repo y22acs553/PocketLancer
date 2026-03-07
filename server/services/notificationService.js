@@ -23,7 +23,7 @@ export async function sendBookingConfirmed(clientId, bookingId, meta = {}) {
     userId: clientId,
     type: "booking_confirmed",
     message: meta.serviceType
-      ? `Your "${meta.serviceType}" booking has been confirmed`
+      ? `Your "${meta.serviceType}" booking has been confirmed! The freelancer is on their way.`
       : "Your booking has been confirmed",
     link: `/bookings/${bookingId}`,
   });
@@ -51,6 +51,49 @@ export async function sendBookingCancelled(clientId, bookingId, meta = {}) {
   });
 }
 
+/**
+ * NEW: Freelancer rejected the booking.
+ * Notifies client clearly; if payment was held, triggers refund notification too.
+ */
+export async function sendBookingRejected(clientId, bookingId, meta = {}) {
+  return notify({
+    userId: clientId,
+    type: "booking_rejected",
+    message: meta.serviceType
+      ? `Your "${meta.serviceType}" booking was declined by the freelancer.${meta.wasPaymentHeld ? " A full refund has been initiated to your account." : ""}`
+      : "Your booking was declined by the freelancer.",
+    link: `/bookings/${bookingId}`,
+  });
+}
+
+/**
+ * NEW: Refund has been initiated.
+ */
+export async function sendRefundInitiated(clientId, bookingId, meta = {}) {
+  return notify({
+    userId: clientId,
+    type: "refund_initiated",
+    message: meta.amount
+      ? `₹${meta.amount.toLocaleString("en-IN")} refund initiated for "${meta.serviceType || "your booking"}". It will reflect in 5–7 business days.`
+      : "A refund has been initiated for your booking.",
+    link: `/bookings/${bookingId}`,
+  });
+}
+
+/**
+ * NEW: Freelancer arrived at client location.
+ */
+export async function sendFreelancerArrived(clientId, bookingId, meta = {}) {
+  return notify({
+    userId: clientId,
+    type: "freelancer_arrived",
+    message: meta.serviceType
+      ? `Your freelancer has arrived at your location for "${meta.serviceType}". Work is starting now!`
+      : "Your freelancer has arrived at your location.",
+    link: `/bookings/${bookingId}`,
+  });
+}
+
 // ── Disputes ──────────────────────────────────────────────────────
 
 export async function sendDisputeCreated(userId, disputeId) {
@@ -66,9 +109,9 @@ export async function sendDisputeCreated(userId, disputeId) {
 export async function sendDisputeResolved(userId, resolution) {
   const msg =
     resolution === "refund_to_client"
-      ? "Your dispute was resolved — a refund has been issued."
+      ? "Your dispute was resolved — a full refund has been issued to your account."
       : resolution === "release_to_freelancer"
-        ? "Your dispute was resolved — payment released to the freelancer."
+        ? "Your dispute was resolved — payment has been released to the freelancer."
         : "Your dispute was resolved with a 50/50 split.";
 
   return notify({
@@ -110,8 +153,8 @@ export async function sendPaymentReleased(userId, amount, serviceType) {
 export async function sendPaymentReceived(userId, amount, serviceType) {
   return notify({
     userId,
-    type: "payment_released",
-    message: `₹${amount.toLocaleString("en-IN")} received for "${serviceType}"`,
+    type: "payment_received",
+    message: `₹${amount.toLocaleString("en-IN")} received in escrow for "${serviceType}". You can start working!`,
     link: "/freelancer/bookings",
   });
 }

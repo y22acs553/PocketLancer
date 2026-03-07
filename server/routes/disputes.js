@@ -12,6 +12,7 @@ import {
   sendDisputeResolved,
 } from "../services/notificationService.js";
 import { deductScore } from "../services/honorScoreService.js";
+import { notify } from "../utils/notify.js";
 import Razorpay from "razorpay";
 
 const router = express.Router();
@@ -257,9 +258,22 @@ router.patch("/:id/status", protect, authorize("admin"), async (req, res) => {
 // ── PATCH /api/disputes/:id/resolve (admin) ───────────────────────
 router.patch("/:id/resolve", protect, authorize("admin"), async (req, res) => {
   const { resolution, adminNotes } = req.body;
-  if (
-    !["refund_to_client", "release_to_freelancer", "split"].includes(resolution)
-  )
+
+  // Digital bookings → financial resolutions
+  // Field bookings   → honour-score-only resolutions (no money involved)
+  const DIGITAL_RESOLUTIONS = [
+    "refund_to_client",
+    "release_to_freelancer",
+    "split",
+  ];
+  const FIELD_RESOLUTIONS = [
+    "favour_client",
+    "favour_freelancer",
+    "both_at_fault",
+  ];
+  const ALL = [...DIGITAL_RESOLUTIONS, ...FIELD_RESOLUTIONS];
+
+  if (!ALL.includes(resolution))
     return res.status(400).json({ msg: "Invalid resolution" });
   if (!adminNotes?.trim())
     return res.status(400).json({ msg: "Admin notes are required" });
@@ -271,9 +285,29 @@ router.patch("/:id/resolve", protect, authorize("admin"), async (req, res) => {
       return res.status(400).json({ msg: "Already resolved" });
 
     const booking = await Booking.findById(dispute.bookingId)
-      .populate("clientId", "_id")
-      .populate("freelancerId", "user");
+      .populate("clientId", "_id name")
+      .populate("freelancerId", "user title");
     if (!booking) return res.status(404).json({ msg: "Booking not found" });
+
+    // Cross-category guard
+    if (
+      booking.serviceCategory === "field" &&
+      DIGITAL_RESOLUTIONS.includes(resolution)
+    )
+      return res
+        .status(400)
+        .json({
+          msg: "Field bookings must use favour_client / favour_freelancer / both_at_fault.",
+        });
+    if (
+      booking.serviceCategory === "digital" &&
+      FIELD_RESOLUTIONS.includes(resolution)
+    )
+      return res
+        .status(400)
+        .json({
+          msg: "Digital bookings must use refund_to_client / release_to_freelancer / split.",
+        });
 
     dispute.status = "resolved";
     dispute.resolution = resolution;
@@ -282,7 +316,7 @@ router.patch("/:id/resolve", protect, authorize("admin"), async (req, res) => {
 
     booking.disputeLocked = false;
 
-    // Execute financial resolution for digital bookings
+    // ── DIGITAL: financial + honour-score resolution ──────────────
     if (
       booking.serviceCategory === "digital" &&
       booking.paymentStatus === "held"
@@ -298,23 +332,45 @@ router.patch("/:id/resolve", protect, authorize("admin"), async (req, res) => {
         if (refund) booking.razorpayRefundId = refund.id;
         booking.refundedAt = new Date();
         booking.status = "cancelled";
-        // Penalise freelancer
         await deductScore(
           booking.freelancerId.user,
           10,
-          `Dispute resolved against you for "${booking.serviceType}"`,
+          `Dispute ruled against you — "${booking.serviceType}"`,
         );
+        await notify({
+          userId: booking.freelancerId.user,
+          type: "honor_score_changed",
+          message: `Honor Score −10: dispute ruled against you for "${booking.serviceType}".`,
+          link: `/freelancer/bookings`,
+        });
+        await notify({
+          userId: booking.clientId._id,
+          type: "refund_initiated",
+          message: `₹${(booking.escrowAmount || 0).toLocaleString("en-IN")} refund approved for "${booking.serviceType}". Dispute resolved in your favour.`,
+          link: `/bookings/${booking._id}`,
+        });
       } else if (resolution === "release_to_freelancer") {
         booking.paymentStatus = "released";
         booking.releasedAmount = booking.escrowAmount;
         booking.releasedAt = new Date();
         booking.status = "completed";
-        // Penalise client
         await deductScore(
           booking.clientId._id,
           10,
-          `Dispute resolved against you for "${booking.serviceType}"`,
+          `Dispute ruled against you — "${booking.serviceType}"`,
         );
+        await notify({
+          userId: booking.clientId._id,
+          type: "honor_score_changed",
+          message: `Honor Score −10: dispute ruled against you for "${booking.serviceType}".`,
+          link: `/bookings/${booking._id}`,
+        });
+        await notify({
+          userId: booking.freelancerId.user,
+          type: "payment_released",
+          message: `₹${(booking.escrowAmount || 0).toLocaleString("en-IN")} released — dispute resolved in your favour for "${booking.serviceType}".`,
+          link: `/freelancer/bookings`,
+        });
       } else if (resolution === "split") {
         const half = Math.floor(paise / 2);
         await razorpay.payments
@@ -324,17 +380,93 @@ router.patch("/:id/resolve", protect, authorize("admin"), async (req, res) => {
         booking.refundedAmount = booking.escrowAmount / 2;
         booking.releasedAmount = booking.escrowAmount / 2;
         booking.status = "completed";
-        // Penalise both
         await deductScore(
           booking.clientId._id,
           5,
-          `Dispute split for "${booking.serviceType}"`,
+          `Dispute split — "${booking.serviceType}"`,
         );
         await deductScore(
           booking.freelancerId.user,
           5,
-          `Dispute split for "${booking.serviceType}"`,
+          `Dispute split — "${booking.serviceType}"`,
         );
+        await notify({
+          userId: booking.clientId._id,
+          type: "honor_score_changed",
+          message: `Dispute split 50/50 for "${booking.serviceType}". Honor Score −5.`,
+          link: `/bookings/${booking._id}`,
+        });
+        await notify({
+          userId: booking.freelancerId.user,
+          type: "honor_score_changed",
+          message: `Dispute split 50/50 for "${booking.serviceType}". Honor Score −5.`,
+          link: `/freelancer/bookings`,
+        });
+      }
+
+      // ── FIELD: honour-score-only resolution (no money involved) ──
+    } else if (booking.serviceCategory === "field") {
+      booking.status = "completed";
+
+      if (resolution === "favour_client") {
+        await deductScore(
+          booking.freelancerId.user,
+          10,
+          `Field dispute ruled against you — "${booking.serviceType}"`,
+        );
+        await notify({
+          userId: booking.freelancerId.user,
+          type: "honor_score_changed",
+          message: `Honor Score −10: field dispute ruled against you for "${booking.serviceType}". Please ensure quality service.`,
+          link: `/freelancer/bookings`,
+        });
+        await notify({
+          userId: booking.clientId._id,
+          type: "dispute_resolved",
+          message: `Your dispute for "${booking.serviceType}" was resolved in your favour.`,
+          link: `/bookings/${booking._id}`,
+        });
+      } else if (resolution === "favour_freelancer") {
+        await deductScore(
+          booking.clientId._id,
+          10,
+          `Field dispute ruled against you — "${booking.serviceType}"`,
+        );
+        await notify({
+          userId: booking.clientId._id,
+          type: "honor_score_changed",
+          message: `Honor Score −10: field dispute ruled against you for "${booking.serviceType}".`,
+          link: `/bookings/${booking._id}`,
+        });
+        await notify({
+          userId: booking.freelancerId.user,
+          type: "dispute_resolved",
+          message: `Field dispute for "${booking.serviceType}" resolved in your favour. Thank you for your professionalism.`,
+          link: `/freelancer/bookings`,
+        });
+      } else if (resolution === "both_at_fault") {
+        await deductScore(
+          booking.clientId._id,
+          5,
+          `Field dispute — both at fault — "${booking.serviceType}"`,
+        );
+        await deductScore(
+          booking.freelancerId.user,
+          5,
+          `Field dispute — both at fault — "${booking.serviceType}"`,
+        );
+        await notify({
+          userId: booking.clientId._id,
+          type: "honor_score_changed",
+          message: `Honor Score −5: field dispute for "${booking.serviceType}" — both parties held responsible.`,
+          link: `/bookings/${booking._id}`,
+        });
+        await notify({
+          userId: booking.freelancerId.user,
+          type: "honor_score_changed",
+          message: `Honor Score −5: field dispute for "${booking.serviceType}" — both parties held responsible.`,
+          link: `/freelancer/bookings`,
+        });
       }
     } else {
       booking.status = "completed";

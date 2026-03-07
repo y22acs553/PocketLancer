@@ -17,20 +17,28 @@ const notificationSchema = new mongoose.Schema(
         "booking_confirmed",
         "booking_cancelled",
         "booking_completed",
+        "booking_rejected", // ← NEW: freelancer rejected the booking
         // Disputes
         "dispute_created",
         "dispute_resolved",
+        "dispute_updated",
         // Auth
         "password_reset",
         // Admin
         "admin_message",
         // Payments
         "payment_released",
+        "payment_received",
+        "refund_initiated", // ← NEW: refund is being processed
+        "payment_failed",
+        "message_received",
         // Honor score
         "honor_score_changed",
         // Misc
         "review_received",
         "profile_updated",
+        // Field
+        "freelancer_arrived", // ← NEW: freelancer marked arrived
       ],
       required: true,
     },

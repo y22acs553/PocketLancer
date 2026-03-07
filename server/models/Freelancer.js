@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+
 const GeoPointSchema = new mongoose.Schema(
   {
     type: { type: String, enum: ["Point"], required: true, default: "Point" },
@@ -17,6 +18,7 @@ const GeoPointSchema = new mongoose.Schema(
   },
   { _id: false },
 );
+
 const MilestoneSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
@@ -26,6 +28,19 @@ const MilestoneSchema = new mongoose.Schema(
   },
   { _id: true },
 );
+
+// ── Availability Range ────────────────────────────────────────────
+// A date range (inclusive) during which the freelancer is unavailable.
+// Stored as YYYY-MM-DD strings so timezone comparison is simple.
+const UnavailableRangeSchema = new mongoose.Schema(
+  {
+    start: { type: String, required: true }, // YYYY-MM-DD
+    end: { type: String, required: true }, // YYYY-MM-DD (same as start for single day)
+    note: { type: String, default: "" },
+  },
+  { _id: true },
+);
+
 const FreelancerSchema = new mongoose.Schema(
   {
     user: {
@@ -38,43 +53,50 @@ const FreelancerSchema = new mongoose.Schema(
     bio: { type: String, trim: true, default: "" },
     skills: { type: [String], default: [] },
     profilePic: { type: String, default: "" },
+
     // ── Category ─────────────────────────────────────
     category: {
       type: String,
       enum: ["field", "digital"],
       default: "field",
     },
+
+    // ── Visibility ───────────────────────────────────
+    // When false, the profile is hidden from search results
+    isVisible: { type: Boolean, default: true },
+
+    // ── Availability ─────────────────────────────────
+    // Array of date ranges during which the freelancer is unavailable.
+    // Single-day blocks: start === end.
+    unavailableRanges: { type: [UnavailableRangeSchema], default: [] },
+
     // ── Pricing ──────────────────────────────────────
     pricingType: {
       type: String,
       enum: ["hourly", "fixed", "milestone"],
       default: "hourly",
     },
-    /** hourlyRate — used when pricingType === "hourly" */
     hourlyRate: { type: Number, default: 0, min: 0 },
-    /** fixedPrice — used when pricingType === "fixed" */
     fixedPrice: { type: Number, default: 0, min: 0 },
-    /**
-     * advanceAmount — DIGITAL HOURLY only.
-     * When a client doesn't know how many hours the work will take,
-     * they pay this advance amount upfront. The rest is settled after work.
-     * Freelancer sets this on their profile.
-     */
     advanceAmount: { type: Number, default: 0, min: 0 },
     milestones: { type: [MilestoneSchema], default: [] },
+
     // ── Location (field workers only) ────────────────
     location: { type: GeoPointSchema, required: false },
     city: { type: String, trim: true, default: "" },
     country: { type: String, trim: true, default: "" },
+
     // ── Portfolio ─────────────────────────────────────
     portfolio: { type: [String], default: [] },
     pastWorks: { type: mongoose.Schema.Types.Mixed, default: [] },
+
     // ── Stats ─────────────────────────────────────────
     rating: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
     name: { type: String, default: "" },
     email: { type: String, default: "" },
     dateOfBirth: { type: Date, default: null },
+
     // ── Bank Details (digital freelancers) ────────────
     bankDetails: {
       accountHolder: { type: String, trim: true, default: "" },
@@ -86,5 +108,7 @@ const FreelancerSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
 FreelancerSchema.index({ location: "2dsphere" });
+
 export default mongoose.model("Freelancer", FreelancerSchema);

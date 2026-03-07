@@ -1,3 +1,4 @@
+// server/models/Dispute.js
 import mongoose from "mongoose";
 
 const EvidenceSchema = new mongoose.Schema(
@@ -46,7 +47,17 @@ const DisputeSchema = new mongoose.Schema(
 
     resolution: {
       type: String,
-      enum: ["release_to_freelancer", "refund_to_client", null],
+      enum: [
+        // Digital resolutions (escrow involved)
+        "release_to_freelancer",
+        "refund_to_client",
+        "split",
+        // Field resolutions (honor score only — no escrow)
+        "favour_client",
+        "favour_freelancer",
+        "both_at_fault",
+        null,
+      ],
       default: null,
     },
   },

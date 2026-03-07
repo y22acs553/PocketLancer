@@ -5,6 +5,17 @@ const UserSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
 
+    // ── SEO / Public username ───────────────────────────────────
+    // e.g. "dedeep-reddy" → pocketlancer.com/f/dedeep-reddy
+    // Generated from name on register, unique, URL-safe lowercase.
+    username: {
+      type: String,
+      unique: true,
+      sparse: true,
+      lowercase: true,
+      trim: true,
+    },
+
     email: {
       type: String,
       required: true,
@@ -18,10 +29,8 @@ const UserSchema = new mongoose.Schema(
       required: true,
       select: false,
     },
-    avatar: {
-      type: String,
-      default: "",
-    },
+
+    avatar: { type: String, default: "" },
 
     phone: { type: String, trim: true, default: "" },
     dateOfBirth: { type: Date, default: null },
@@ -47,7 +56,6 @@ const UserSchema = new mongoose.Schema(
     },
 
     // ── Honor Score ──────────────────────────────────────────
-    // Tracks user reliability (100 = perfect, < 35 = unreliable)
     honorScore: { type: Number, default: 100, min: 0, max: 100 },
   },
   { timestamps: true },
@@ -59,7 +67,6 @@ UserSchema.methods.matchPassword = async function (enteredPassword) {
 
 UserSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
-
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
   next();

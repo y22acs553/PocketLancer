@@ -1,10 +1,13 @@
 // client/app/dashboard/freelancer/page.tsx
+// KEY ADDITIONS:
+// 1. "Today's Field Jobs" quick-arrive widget — freelancer taps one button
+//    without opening the booking detail page.
+// 2. Status update for "completed" now correctly uses "pending_approval" flow.
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/services/api";
-import GetLocationButton from "@/components/GetLocationButton";
 import { useUser } from "@/context/UserContext";
 import {
   Loader2,
@@ -20,6 +23,8 @@ import {
   XCircle,
   ClipboardList,
   Shield,
+  Navigation,
+  Clock,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -30,7 +35,8 @@ type BookingStatus =
   | "pending_approval"
   | "completed"
   | "cancelled"
-  | "disputed";
+  | "disputed"
+  | "rejected";
 
 type Booking = {
   _id: string;
@@ -41,6 +47,9 @@ type Booking = {
   serviceCategory?: "field" | "digital";
   deadline?: string;
   autoReleaseAt?: string;
+  arrivalVerified?: boolean;
+  address?: string;
+  clientId?: { name?: string; avatar?: string };
 };
 
 type Profile = {
@@ -58,7 +67,6 @@ type Profile = {
   pastWorks?: any[];
 };
 
-// ── Honor score helpers ────────────────────────────────────────────
 function honorLabel(score: number) {
   if (score < 35) return "Low Trust";
   if (score < 75) return "Average";
@@ -91,7 +99,6 @@ function honorColors(score: number) {
   };
 }
 
-// ── Score history pill ─────────────────────────────────────────────
 const SCORE_EVENTS = [
   { event: "Clean completion", change: "+2", color: "text-emerald-400" },
   { event: "Missed arrival", change: "−5", color: "text-orange-400" },
@@ -114,13 +121,14 @@ export default function FreelancerDashboard() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [toast, setToast] = useState("");
 
+  // Quick-arrive state
+  const [arrivingId, setArrivingId] = useState<string | null>(null);
+
   const score = user?.honorScore ?? 100;
   const hc = honorColors(score);
-
   const card =
     "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10";
 
-  // ── Load data ──────────────────────────────────────────────────
   useEffect(() => {
     Promise.all([api.get("/bookings/mybookings"), api.get("/freelancers/me")])
       .then(([bRes, pRes]) => {
@@ -141,7 +149,6 @@ export default function FreelancerDashboard() {
     }
   }, [toast]);
 
-  // ── Derived stats ──────────────────────────────────────────────
   const stats = useMemo(
     () => ({
       total: bookings.length,
@@ -163,6 +170,20 @@ export default function FreelancerDashboard() {
     [bookings],
   );
 
+  // Today's field bookings that haven't been marked as arrived yet
+  const todayStr = new Date().toISOString().split("T")[0];
+  const todayFieldBookings = useMemo(
+    () =>
+      bookings.filter(
+        (b) =>
+          b.serviceCategory === "field" &&
+          ["confirmed", "in_progress"].includes(b.status) &&
+          b.preferredDate === todayStr &&
+          !b.arrivalVerified,
+      ),
+    [bookings, todayStr],
+  );
+
   const profileCompletion = useMemo(() => {
     if (!profile) return { percent: 0, missing: [] as string[] };
     const missing: string[] = [];
@@ -181,24 +202,65 @@ export default function FreelancerDashboard() {
     return { percent: Math.round((done / 7) * 100), missing };
   }, [profile]);
 
-  // ── Actions ────────────────────────────────────────────────────
   const updateStatus = async (
     bookingId: string,
-    status: "confirmed" | "completed" | "cancelled",
+    status: "confirmed" | "completed" | "cancelled" | "rejected",
   ) => {
     try {
       setActionLoading(`${bookingId}:${status}`);
-      await api.patch(`/bookings/${bookingId}/status`, { status });
+      const res = await api.patch(`/bookings/${bookingId}/status`, { status });
+      const updated = res.data.booking;
       setBookings((prev) =>
-        prev.map((b) => (b._id === bookingId ? { ...b, status } : b)),
+        prev.map((b) => (b._id === bookingId ? { ...b, ...updated } : b)),
       );
-      setToast(`Booking updated → ${status}`);
+      setToast(
+        status === "rejected" ? "Booking rejected" : `Booking → ${status}`,
+      );
     } catch (err: any) {
       setToast(err?.response?.data?.msg || "Failed to update booking");
     } finally {
       setActionLoading(null);
     }
   };
+
+  // ── Quick Mark Arrived (uses device GPS) ─────────────────────────
+  const handleQuickArrive = useCallback(async (bookingId: string) => {
+    setArrivingId(bookingId);
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+        }),
+      );
+
+      await api.post("/bookings/quick-arrive", {
+        bookingId,
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+
+      setBookings((prev) =>
+        prev.map((b) =>
+          b._id === bookingId
+            ? { ...b, arrivalVerified: true, status: "in_progress" }
+            : b,
+        ),
+      );
+      setToast("✅ Arrival marked! Client has been notified.");
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.msg ||
+        (err?.code === 1
+          ? "Location permission denied. Please enable GPS."
+          : err?.code === 3
+            ? "GPS timed out. Please try again."
+            : "Failed to mark arrival. Try again.");
+      setToast(`⚠️ ${msg}`);
+    } finally {
+      setArrivingId(null);
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -213,353 +275,309 @@ export default function FreelancerDashboard() {
     <div className="space-y-6">
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-xl">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-xl">
           {toast}
         </div>
       )}
 
-      {/* ── Welcome banner ── */}
-      <div className="rounded-3xl bg-gradient-to-r from-slate-900 to-slate-700 p-7 text-white shadow">
-        <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-sm font-bold text-slate-300">Welcome back</p>
-            <h2 className="mt-1 text-3xl font-black">
-              {user?.name || "Freelancer"}
-            </h2>
-            <p className="mt-1 text-sm text-slate-300">
-              Manage bookings & keep your profile strong to get more clients.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={() => router.push("/freelancer/profile")}
-              className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-black text-slate-900 active:bg-slate-100"
-            >
-              <User size={16} /> Edit Profile
-            </button>
-            <button
-              onClick={() => router.push("/freelancer/bookings")}
-              className="inline-flex items-center gap-2 rounded-2xl border border-white/30 px-5 py-3 text-sm font-black text-white active:bg-white/10"
-            >
-              <CalendarCheck2 size={16} /> All Bookings
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Honor Score + Stats ── */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        {/* Honor Score card — 2 cols always, lg 2 of 5 */}
-        <div
-          className={`col-span-2 rounded-3xl bg-gradient-to-br p-6 text-white shadow ${hc.card}`}
-        >
-          <div className="flex items-start justify-between gap-3">
+      {/* ── TODAY'S FIELD JOBS — Quick Arrive Panel ─────────────────── */}
+      {todayFieldBookings.length > 0 && (
+        <div className="rounded-3xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/40 p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="h-9 w-9 rounded-2xl bg-amber-400 flex items-center justify-center">
+              <Navigation size={18} className="text-white" />
+            </div>
             <div>
-              <p className="text-xs font-black uppercase tracking-widest text-slate-400">
-                Reliability Score
+              <p className="text-sm font-black text-amber-900 dark:text-amber-100">
+                Today's Field Jobs
               </p>
-              <p className="mt-2 text-5xl font-black">{score}</p>
-              <p className={`mt-1 text-sm font-black ${hc.text}`}>
-                {honorLabel(score)}
+              <p className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                Tap "Mark Arrived" when you reach the client — no need to open
+                the booking
               </p>
             </div>
-            <span
-              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ring-1 ${hc.icon}`}
-            >
-              <Shield size={22} />
-            </span>
           </div>
 
-          {/* Progress bar */}
-          <div className="mt-4">
-            <div className="mb-1.5 flex justify-between text-[10px] font-black text-slate-500">
-              <span>0</span>
-              <span>50</span>
-              <span>100</span>
-            </div>
-            <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/10">
+          <div className="space-y-3">
+            {todayFieldBookings.map((b) => (
               <div
-                className={`h-full rounded-full transition-all duration-700 ${hc.bar}`}
-                style={{ width: `${score}%` }}
-              />
-            </div>
-            <p className="mt-2 text-[10px] font-bold text-slate-500">
-              {hc.tip}
-            </p>
+                key={b._id}
+                className="flex items-center gap-3 rounded-2xl bg-white dark:bg-slate-900 p-4 shadow-sm"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-black text-slate-900 dark:text-white truncate">
+                    {b.serviceType}
+                  </p>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-1">
+                    <Clock size={11} />
+                    {b.preferredTime}
+                    {b.address && (
+                      <>
+                        <span className="mx-1">·</span>
+                        <MapPin size={11} />
+                        <span className="truncate max-w-[150px]">
+                          {b.address}
+                        </span>
+                      </>
+                    )}
+                  </p>
+                  {b.clientId?.name && (
+                    <p className="text-xs font-bold text-slate-400 mt-0.5">
+                      Client: {b.clientId.name}
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => handleQuickArrive(b._id)}
+                  disabled={arrivingId === b._id}
+                  className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 text-xs font-black transition disabled:opacity-60"
+                >
+                  {arrivingId === b._id ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Navigation size={13} />
+                  )}
+                  {arrivingId === b._id ? "Getting GPS…" : "Mark Arrived"}
+                </button>
+              </div>
+            ))}
           </div>
         </div>
+      )}
 
-        {/* Booking stats */}
+      {/* ── Stats ──────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          { label: "Total", value: stats.total },
-          { label: "Confirmed", value: stats.confirmed },
-          { label: "Pending", value: stats.pending },
-        ].map((s) => (
-          <div key={s.label} className={card}>
-            <p className="text-xs font-black uppercase tracking-widest text-slate-400">
-              {s.label}
-            </p>
-            <p className="mt-3 text-4xl font-black text-slate-900 dark:text-white">
-              {s.value}
+          {
+            label: "Total",
+            value: stats.total,
+            icon: <ClipboardList size={16} />,
+          },
+          {
+            label: "Completed",
+            value: stats.completed,
+            icon: <CheckCircle size={16} />,
+          },
+          {
+            label: "Confirmed",
+            value: stats.confirmed,
+            icon: <CalendarCheck2 size={16} />,
+          },
+          {
+            label: "Pending",
+            value: stats.pending,
+            icon: <Briefcase size={16} />,
+          },
+        ].map(({ label, value, icon }) => (
+          <div key={label} className={card}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
+                {label}
+              </p>
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                {icon}
+              </div>
+            </div>
+            <p className="mt-3 text-3xl font-black text-slate-900 dark:text-white">
+              {value}
             </p>
           </div>
         ))}
       </div>
 
-      {/* Completed — full row */}
-      <div className={card}>
-        <p className="text-xs font-black uppercase tracking-widest text-slate-400">
-          Completed Bookings
-        </p>
-        <p className="mt-2 text-4xl font-black text-slate-900 dark:text-white">
-          {stats.completed}
-        </p>
-      </div>
+      {/* ── Honor Score Card ────────────────────────────────────────── */}
+      <div
+        className={`rounded-3xl bg-gradient-to-br ${hc.card} p-6 text-white shadow-sm`}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-extrabold uppercase tracking-widest text-white/60">
+              Honor Score
+            </p>
+            <p className={`mt-1 text-5xl font-black ${hc.text}`}>{score}</p>
+            <p className={`mt-1 text-sm font-bold ${hc.text}`}>
+              {honorLabel(score)}
+            </p>
+          </div>
+          <div
+            className={`flex h-12 w-12 items-center justify-center rounded-2xl ring-1 ${hc.icon}`}
+          >
+            <Shield size={22} />
+          </div>
+        </div>
 
-      {/* ── Score rules panel ── */}
-      <div className={`${card} border border-slate-100 dark:border-white/5`}>
-        <h3 className="mb-3 font-black text-slate-900 dark:text-white">
-          How Your Score Changes
-        </h3>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-4 h-2 w-full rounded-full bg-white/10">
+          <div
+            className={`h-2 rounded-full transition-all ${hc.bar}`}
+            style={{ width: `${Math.min(score, 100)}%` }}
+          />
+        </div>
+
+        <p className="mt-3 text-xs font-bold text-white/60">{hc.tip}</p>
+
+        {/* Score events */}
+        <div className="mt-4 flex flex-wrap gap-2">
           {SCORE_EVENTS.map((e) => (
-            <div
+            <span
               key={e.event}
-              className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-800"
+              className="inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-bold"
             >
-              <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                {e.event}
-              </span>
-              <span className={`text-sm font-black ${e.color}`}>
-                {e.change}
-              </span>
-            </div>
-          ))}
-          <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-800">
-            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-              Max score
+              <span className={e.color}>{e.change}</span>
+              <span className="text-white/70">{e.event}</span>
             </span>
-            <span className="text-sm font-black text-emerald-400">100</span>
-          </div>
+          ))}
         </div>
       </div>
 
-      {/* ── Requests + Profile ── */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* LEFT: Pending + Confirmed */}
-        <div className="space-y-6 lg:col-span-7">
-          {/* Pending Requests */}
-          <div className={card}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="flex items-center gap-2 font-black text-slate-900 dark:text-white">
-                <ClipboardList size={18} /> Pending Requests
-              </h3>
-              <span className="text-xs font-black text-slate-500">
-                {pendingBookings.length} pending
-              </span>
-            </div>
-
-            {pendingBookings.length === 0 ? (
-              <div className="rounded-2xl bg-slate-50 p-5 ring-1 ring-black/5 dark:bg-slate-800">
-                <p className="font-black text-slate-700 dark:text-white">
-                  No pending requests
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Requests from clients will appear here.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {pendingBookings.slice(0, 6).map((b) => (
-                  <div
-                    key={b._id}
-                    className="flex flex-col gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5 dark:bg-slate-800 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="font-black text-slate-900 dark:text-white">
-                        {b.serviceType}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {new Date(b.preferredDate).toLocaleDateString()} ·{" "}
-                        {b.preferredTime}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => updateStatus(b._id, "confirmed")}
-                        disabled={actionLoading === `${b._id}:confirmed`}
-                        className="inline-flex items-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-black text-white active:bg-emerald-700 disabled:opacity-60"
-                      >
-                        {actionLoading === `${b._id}:confirmed` ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : (
-                          <CheckCircle size={14} />
-                        )}
-                        Accept
-                      </button>
-                      <button
-                        onClick={() => updateStatus(b._id, "cancelled")}
-                        disabled={actionLoading === `${b._id}:cancelled`}
-                        className="inline-flex items-center gap-1.5 rounded-2xl bg-red-600 px-4 py-2 text-sm font-black text-white active:bg-red-700 disabled:opacity-60"
-                      >
-                        {actionLoading === `${b._id}:cancelled` ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : (
-                          <XCircle size={14} />
-                        )}
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Confirmed / In-Progress */}
-          <div className={card}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="font-black text-slate-900 dark:text-white">
-                Active Jobs
-              </h3>
-              <span className="text-xs font-black text-slate-500">
-                {confirmedBookings.length} active
-              </span>
-            </div>
-
-            {confirmedBookings.length === 0 ? (
-              <div className="rounded-2xl bg-slate-50 p-5 ring-1 ring-black/5 dark:bg-slate-800">
-                <p className="font-black text-slate-700 dark:text-white">
-                  No active jobs
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Confirmed bookings appear here.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {confirmedBookings.slice(0, 6).map((b) => (
-                  <div
-                    key={b._id}
-                    className="flex flex-col gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-black/5 dark:bg-slate-800 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="font-black text-slate-900 dark:text-white">
-                        {b.serviceType}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-xs text-slate-500">
-                          {new Date(b.preferredDate).toLocaleDateString()} ·{" "}
-                          {b.preferredTime}
-                        </p>
-                        {b.serviceCategory === "digital" && b.deadline && (
-                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700 ring-1 ring-amber-100 dark:bg-amber-500/10 dark:text-amber-300">
-                            Due {new Date(b.deadline).toLocaleDateString()}
-                          </span>
-                        )}
-                        {b.serviceCategory === "field" && (
-                          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-black text-blue-700 ring-1 ring-blue-100 dark:bg-blue-500/10 dark:text-blue-300">
-                            Field · Mark Arrived First
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => router.push(`/bookings/${b._id}`)}
-                        className="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-black text-white active:bg-blue-700"
-                      >
-                        <ArrowRight size={14} /> Open
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* RIGHT: Profile strength */}
-        <div className="space-y-6 lg:col-span-5">
-          <div className={card}>
-            <h3 className="mb-4 font-black text-slate-900 dark:text-white">
-              Profile Strength
-            </h3>
-            <div className="mb-1.5 flex items-center justify-between">
-              <p className="text-sm font-bold text-slate-600 dark:text-slate-300">
-                Completion
-              </p>
-              <p className="text-sm font-black text-slate-900 dark:text-white">
-                {profileCompletion.percent}%
-              </p>
-            </div>
-            <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+      {/* ── Pending Bookings ────────────────────────────────────────── */}
+      {pendingBookings.length > 0 && (
+        <div className={card}>
+          <p className="mb-4 text-sm font-black text-slate-900 dark:text-white">
+            Pending Requests ({pendingBookings.length})
+          </p>
+          <div className="space-y-3">
+            {pendingBookings.map((b) => (
               <div
-                className="h-full rounded-full bg-blue-600 transition-all duration-700"
-                style={{ width: `${profileCompletion.percent}%` }}
-              />
-            </div>
+                key={b._id}
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-slate-950"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-900 dark:text-white">
+                      {b.serviceType}
+                    </p>
+                    <p className="mt-0.5 text-xs font-bold text-slate-500 dark:text-slate-400">
+                      {b.preferredDate} · {b.preferredTime}
+                      {b.serviceCategory === "field" && (
+                        <span className="ml-2 text-amber-600">📍 Field</span>
+                      )}
+                      {b.serviceCategory === "digital" && (
+                        <span className="ml-2 text-violet-600">💻 Digital</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex flex-shrink-0 gap-2">
+                    <button
+                      onClick={() => updateStatus(b._id, "confirmed")}
+                      disabled={!!actionLoading}
+                      className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {actionLoading === `${b._id}:confirmed` ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <CheckCircle size={12} />
+                      )}
+                      Accept
+                    </button>
+                    <button
+                      onClick={() => updateStatus(b._id, "rejected")}
+                      disabled={!!actionLoading}
+                      className="inline-flex items-center gap-1 rounded-xl bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300 px-3 py-1.5 text-xs font-black hover:bg-red-200 dark:hover:bg-red-500/30 disabled:opacity-50"
+                    >
+                      {actionLoading === `${b._id}:rejected` ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <XCircle size={12} />
+                      )}
+                      Reject
+                    </button>
+                  </div>
+                </div>
 
-            {profileCompletion.missing.length > 0 ? (
-              <div className="mt-4 rounded-2xl bg-amber-50 p-4 ring-1 ring-amber-100 dark:bg-amber-500/10 dark:ring-amber-500/20">
-                <p className="flex items-center gap-2 text-sm font-black text-amber-800 dark:text-amber-300">
-                  <TrendingUp size={15} /> Improve visibility by adding:
-                </p>
-                <ul className="mt-2 space-y-0.5 text-sm font-bold text-amber-900 dark:text-amber-400">
-                  {profileCompletion.missing.slice(0, 6).map((m) => (
-                    <li key={m}>• {m}</li>
-                  ))}
-                </ul>
+                <button
+                  onClick={() => router.push(`/bookings/${b._id}`)}
+                  className="mt-3 flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline"
+                >
+                  View details <ArrowRight size={12} />
+                </button>
               </div>
-            ) : (
-              <div className="mt-4 rounded-2xl bg-emerald-50 p-4 ring-1 ring-emerald-100 dark:bg-emerald-500/10">
-                <p className="flex items-center gap-2 text-sm font-black text-emerald-800 dark:text-emerald-300">
-                  <BadgeCheck size={15} /> Perfect profile — fully searchable!
-                </p>
-              </div>
-            )}
-
-            <button
-              onClick={() => router.push("/freelancer/profile")}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white active:bg-slate-700 dark:bg-white dark:text-slate-900"
-            >
-              Update Profile <ArrowRight size={16} />
-            </button>
-          </div>
-
-          {/* Quick Info */}
-          <div className={card}>
-            <h3 className="mb-4 font-black text-slate-900 dark:text-white">
-              Quick Info
-            </h3>
-            <div className="space-y-3 text-sm font-bold text-slate-700 dark:text-slate-300">
-              <p className="flex items-center gap-2">
-                <Briefcase size={15} className="text-slate-400" />
-                {profile?.title || "No title yet"}
-              </p>
-              <p className="flex items-center gap-2">
-                <MapPin size={15} className="text-slate-400" />
-                {profile?.city && profile?.country
-                  ? `${profile.city}, ${profile.country}`
-                  : "Location not set"}
-              </p>
-              <p className="flex items-center gap-2">
-                <Star size={15} className="text-amber-500" />
-                Reviews increase trust — ask clients to leave one
-              </p>
-              <p className="flex items-center gap-2 text-xs font-bold text-slate-500">
-                <Shield size={13} className="text-slate-400" />
-                For field jobs: always mark "Arrived" via the booking page
-                before completing
-              </p>
-            </div>
+            ))}
           </div>
         </div>
-      </div>
+      )}
 
-      <div>
-        <GetLocationButton />
-      </div>
+      {/* ── Confirmed / Active Bookings ─────────────────────────────── */}
+      {confirmedBookings.length > 0 && (
+        <div className={card}>
+          <p className="mb-4 text-sm font-black text-slate-900 dark:text-white">
+            Active Bookings ({confirmedBookings.length})
+          </p>
+          <div className="space-y-3">
+            {confirmedBookings.map((b) => (
+              <div
+                key={b._id}
+                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-slate-950 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition"
+                onClick={() => router.push(`/bookings/${b._id}`)}
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="truncate text-sm font-black text-slate-900 dark:text-white">
+                    {b.serviceType}
+                  </p>
+                  <p className="mt-0.5 text-xs font-bold text-slate-500 dark:text-slate-400">
+                    {b.preferredDate} · {b.preferredTime}
+                  </p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black ring-1 ${
+                        b.status === "in_progress"
+                          ? "bg-blue-500/10 text-blue-700 ring-blue-500/15"
+                          : "bg-indigo-500/10 text-indigo-700 ring-indigo-500/15"
+                      }`}
+                    >
+                      {b.status === "in_progress" ? "In Progress" : "Confirmed"}
+                    </span>
+                    {b.serviceCategory === "field" && b.arrivalVerified && (
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-700 ring-1 ring-emerald-500/15">
+                        <Navigation size={9} /> Arrived
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <ArrowRight
+                  size={16}
+                  className="text-slate-400 flex-shrink-0"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Profile Completion ──────────────────────────────────────── */}
+      {profileCompletion.percent < 100 && (
+        <div
+          className={`${card} border-2 border-dashed border-blue-200 dark:border-blue-500/20`}
+        >
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <p className="text-sm font-black text-slate-900 dark:text-white">
+              Profile Completion
+            </p>
+            <span className="text-lg font-black text-blue-600">
+              {profileCompletion.percent}%
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800">
+            <div
+              className="h-2 rounded-full bg-blue-500 transition-all"
+              style={{ width: `${profileCompletion.percent}%` }}
+            />
+          </div>
+          {profileCompletion.missing.length > 0 && (
+            <p className="mt-3 text-xs font-bold text-slate-500 dark:text-slate-400">
+              Still needed: {profileCompletion.missing.slice(0, 3).join(", ")}
+              {profileCompletion.missing.length > 3 &&
+                ` +${profileCompletion.missing.length - 3} more`}
+            </p>
+          )}
+          <button
+            onClick={() => router.push("/freelancer/profile")}
+            className="mt-3 inline-flex items-center gap-1 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700"
+          >
+            Complete Profile <ArrowRight size={12} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

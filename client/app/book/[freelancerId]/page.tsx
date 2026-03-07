@@ -1,3 +1,8 @@
+// client/app/book/[freelancerId]/page.tsx
+// KEY CHANGE: For field bookings, client can now choose:
+//   Scenario 1 — "Use My Current Location": geo-coords are captured and
+//     sent to server; freelancer proximity is verified on arrival.
+//   Scenario 2 — "Enter a Different Address": manual address only; no GPS check.
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -25,6 +30,8 @@ import {
   Timer,
   Plus,
   Minus,
+  Navigation,
+  Edit3,
 } from "lucide-react";
 
 declare global {
@@ -34,6 +41,7 @@ declare global {
 }
 
 type DigitalPayMode = "advance" | "hours";
+type LocationMode = "current" | "other";
 
 export default function BookFreelancerPage() {
   const params = useParams();
@@ -55,10 +63,18 @@ export default function BookFreelancerPage() {
   const [loadingFreelancer, setLoadingFreelancer] = useState(false);
   const [freelancerError, setFreelancerError] = useState("");
 
-  // ── Digital-specific state ──────────────────────────
+  // Digital-specific state
   const [digitalPayMode, setDigitalPayMode] =
     useState<DigitalPayMode>("advance");
   const [estimatedHours, setEstimatedHours] = useState(1);
+
+  // Field location mode
+  const [locationMode, setLocationMode] = useState<LocationMode>("current");
+  const [clientLat, setClientLat] = useState<number | null>(null);
+  const [clientLng, setClientLng] = useState<number | null>(null);
+  const [fetchingLocation, setFetchingLocation] = useState(false);
+  const [locationError, setLocationError] = useState("");
+  const [locationFetched, setLocationFetched] = useState(false);
 
   useEffect(() => {
     if (!loading && (!user || user.role !== "client")) router.replace("/login");
@@ -93,36 +109,81 @@ export default function BookFreelancerPage() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }, []);
 
-  // ── Compute amount to charge based on mode ──────────
+  // Auto-fetch location when "Use My Location" is selected
+  const fetchCurrentLocation = async () => {
+    setFetchingLocation(true);
+    setLocationError("");
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+        }),
+      );
+      setClientLat(pos.coords.latitude);
+      setClientLng(pos.coords.longitude);
+      setLocationFetched(true);
+
+      // Reverse-geocode to get a readable address
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`,
+        );
+        const data = await res.json();
+        const readable =
+          data.display_name ||
+          `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+        setAddress(readable);
+      } catch {
+        setAddress(
+          `GPS: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`,
+        );
+      }
+    } catch (err: any) {
+      setLocationError(
+        err?.code === 1
+          ? "Location permission denied. Please allow location access or enter address manually."
+          : "Could not fetch location. Please try again or enter address manually.",
+      );
+      setLocationMode("other"); // fallback to manual
+    } finally {
+      setFetchingLocation(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isDigital && locationMode === "current") {
+      fetchCurrentLocation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDigital, locationMode]);
+
   const agreedAmount = useMemo(() => {
     if (!freelancer) return 0;
-
     if (isHourlyDigital) {
-      if (digitalPayMode === "advance") {
-        return freelancer.advanceAmount || 0;
-      }
-      // hours mode
+      if (digitalPayMode === "advance") return freelancer.advanceAmount || 0;
       return parseFloat(
         (estimatedHours * (freelancer.hourlyRate || 0)).toFixed(2),
       );
     }
-
     if (freelancer.pricingType === "fixed") return freelancer.fixedPrice || 0;
     if (freelancer.pricingType === "milestone")
       return (freelancer.milestones || []).reduce(
         (s: number, m: any) => s + m.amount,
         0,
       );
-    // fallback hourly (non-digital)
     return freelancer.hourlyRate || 0;
   }, [freelancer, digitalPayMode, estimatedHours, isHourlyDigital]);
 
   const canSubmit = useMemo(() => {
     if (submitting || !serviceType.trim()) return false;
-    // Phone must be added for digital bookings (payment required)
     if (isDigital && (!user?.phone || !user.phone.trim())) return false;
-
-    if (!isDigital) return !!(preferredDate && preferredTime && address.trim());
+    if (!isDigital) {
+      if (!preferredDate || !preferredTime) return false;
+      if (locationMode === "current" && !locationFetched) return false;
+      if (locationMode === "other" && !address.trim()) return false;
+      return true;
+    }
     if (isHourlyDigital) {
       if (digitalPayMode === "advance")
         return (freelancer?.advanceAmount || 0) > 0;
@@ -141,9 +202,10 @@ export default function BookFreelancerPage() {
     estimatedHours,
     freelancer,
     user?.phone,
+    locationMode,
+    locationFetched,
   ]);
 
-  // ── Digital booking handler ──────────────────────────
   const handleDigitalBooking = async () => {
     setError("");
     setSubmitting(true);
@@ -154,13 +216,9 @@ export default function BookFreelancerPage() {
         serviceType,
         issueDescription,
       };
-
       if (isHourlyDigital) {
-        if (digitalPayMode === "advance") {
-          body.advancePayment = true;
-        } else {
-          body.estimatedHours = estimatedHours;
-        }
+        if (digitalPayMode === "advance") body.advancePayment = true;
+        else body.estimatedHours = estimatedHours;
       }
 
       const bookRes = await api.post("/bookings", body);
@@ -223,20 +281,39 @@ export default function BookFreelancerPage() {
 
   const handleFieldBooking = async () => {
     setError("");
-    if (!serviceType || !preferredDate || !preferredTime || !address) {
+    if (!serviceType || !preferredDate || !preferredTime) {
       setError("Please fill all required fields.");
       return;
     }
+    if (locationMode === "other" && !address.trim()) {
+      setError("Please enter the service address.");
+      return;
+    }
+    if (locationMode === "current" && !locationFetched) {
+      setError(
+        "Location not yet fetched. Please wait or switch to manual address.",
+      );
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await api.post("/bookings", {
+      const body: any = {
         freelancer_id: freelancerId,
         serviceType,
         issueDescription,
         preferredDate,
         preferredTime,
         address,
-      });
+        locationMode,
+      };
+      // Send GPS coords for Scenario 1
+      if (locationMode === "current" && clientLat && clientLng) {
+        body.clientLat = clientLat;
+        body.clientLng = clientLng;
+      }
+
+      await api.post("/bookings", body);
       router.push("/bookings?toast=booking_created");
     } catch (err: any) {
       setError(err.response?.data?.msg || "Failed to create booking.");
@@ -314,15 +391,6 @@ export default function BookFreelancerPage() {
               onSubmit={handleSubmit}
               className="space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950"
             >
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-black text-slate-900 dark:text-white">
-                  Service details
-                </p>
-                <span className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
-                  Required *
-                </span>
-              </div>
-
               {/* Service Type */}
               <div>
                 <label className="mb-2 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
@@ -336,8 +404,8 @@ export default function BookFreelancerPage() {
                     onChange={(e) => setServiceType(e.target.value)}
                     placeholder={
                       isDigital
-                        ? "e.g. Logo Design, Web Dev, Video Editing"
-                        : "e.g. AC Repair, Plumbing, Electrical"
+                        ? "e.g. Logo Design, Web Dev"
+                        : "e.g. AC Repair, Plumbing"
                     }
                     className="w-full bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
                     required
@@ -363,40 +431,24 @@ export default function BookFreelancerPage() {
                     onChange={(e) => setIssueDescription(e.target.value)}
                     placeholder={
                       isDigital
-                        ? "Describe your project — deliverables, style, deadline…"
-                        : "Brand/model, floor, urgency, special instructions…"
+                        ? "Describe your project…"
+                        : "Brand/model, floor, urgency…"
                     }
-                    rows={4}
+                    rows={3}
                     className="w-full resize-none bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
                   />
                 </div>
               </div>
 
-              {/* ── DIGITAL HOURLY: Payment Mode Selector ── */}
+              {/* Digital hourly pay mode */}
               {isHourlyDigital && (
                 <div className="space-y-4">
                   <div className="h-px bg-slate-100 dark:bg-white/10" />
-
-                  <div>
-                    <p className="text-sm font-black text-slate-900 dark:text-white mb-1">
-                      Do you know how long the work will take?
-                    </p>
-                    <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                      If you've already discussed the timeline with the
-                      freelancer, select "Yes".
-                    </p>
-                  </div>
-
-                  {/* Toggle */}
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       type="button"
                       onClick={() => setDigitalPayMode("advance")}
-                      className={`rounded-2xl px-4 py-3 text-sm font-black transition border ${
-                        digitalPayMode === "advance"
-                          ? "bg-violet-600 text-white border-violet-600"
-                          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-white dark:border-slate-800"
-                      }`}
+                      className={`rounded-2xl px-4 py-3 text-sm font-black transition border ${digitalPayMode === "advance" ? "bg-violet-600 text-white border-violet-600" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-white dark:border-slate-800"}`}
                     >
                       <HelpCircle
                         size={16}
@@ -410,11 +462,7 @@ export default function BookFreelancerPage() {
                     <button
                       type="button"
                       onClick={() => setDigitalPayMode("hours")}
-                      className={`rounded-2xl px-4 py-3 text-sm font-black transition border ${
-                        digitalPayMode === "hours"
-                          ? "bg-violet-600 text-white border-violet-600"
-                          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-white dark:border-slate-800"
-                      }`}
+                      className={`rounded-2xl px-4 py-3 text-sm font-black transition border ${digitalPayMode === "hours" ? "bg-violet-600 text-white border-violet-600" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-white dark:border-slate-800"}`}
                     >
                       <Timer size={16} className="inline-block mr-2 mb-0.5" />
                       Yes, I know
@@ -424,95 +472,42 @@ export default function BookFreelancerPage() {
                     </button>
                   </div>
 
-                  {/* Advance mode info */}
-                  {digitalPayMode === "advance" && (
-                    <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/10">
-                      <div className="flex items-start gap-3">
-                        <IndianRupee
-                          size={18}
-                          className="mt-0.5 flex-shrink-0 text-violet-600 dark:text-violet-400"
-                        />
-                        <div>
-                          <p className="text-sm font-black text-violet-900 dark:text-violet-100">
-                            Advance Payment
-                          </p>
-                          <p className="mt-1 text-xs font-bold leading-relaxed text-violet-700 dark:text-violet-300">
-                            You'll pay ₹
-                            {(freelancer?.advanceAmount || 0).toLocaleString(
-                              "en-IN",
-                            )}{" "}
-                            as advance. The freelancer will contact you to
-                            discuss the full scope and remaining payment after
-                            the work begins.
-                          </p>
-                          {(freelancer?.advanceAmount || 0) === 0 && (
-                            <p className="mt-2 text-xs font-black text-red-600 dark:text-red-400">
-                              ⚠ This freelancer has not set an advance amount.
-                              Please message them first.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Hours mode */}
                   {digitalPayMode === "hours" && (
                     <div className="space-y-3">
-                      <div>
-                        <label className="mb-2 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
-                          Estimated Hours{" "}
-                          <span className="text-red-500">*</span>
-                        </label>
-                        <div className="flex items-center gap-4">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setEstimatedHours((h) => Math.max(1, h - 1))
-                            }
-                            className="h-10 w-10 rounded-xl border border-slate-200 flex items-center justify-center hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900 text-slate-700 dark:text-white"
-                          >
-                            <Minus size={16} />
-                          </button>
-                          <div className="flex-1 text-center">
-                            <span className="text-2xl font-black text-slate-900 dark:text-white">
-                              {estimatedHours}
-                            </span>
-                            <span className="text-sm font-bold text-slate-500 ml-2">
-                              {estimatedHours === 1 ? "hour" : "hours"}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setEstimatedHours((h) => Math.min(100, h + 1))
-                            }
-                            className="h-10 w-10 rounded-xl border border-slate-200 flex items-center justify-center hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900 text-slate-700 dark:text-white"
-                          >
-                            <Plus size={16} />
-                          </button>
+                      <div className="flex items-center gap-4">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEstimatedHours((h) => Math.max(1, h - 1))
+                          }
+                          className="h-10 w-10 rounded-xl border border-slate-200 flex items-center justify-center dark:border-slate-800"
+                        >
+                          <Minus size={16} />
+                        </button>
+                        <div className="flex-1 text-center">
+                          <span className="text-2xl font-black text-slate-900 dark:text-white">
+                            {estimatedHours}
+                          </span>
+                          <span className="text-sm font-bold text-slate-500 ml-2">
+                            {estimatedHours === 1 ? "hour" : "hours"}
+                          </span>
                         </div>
-                      </div>
-
-                      {/* Calculation */}
-                      <div className="rounded-2xl bg-slate-50 dark:bg-slate-900 p-4 flex items-center justify-between">
-                        <span className="text-sm font-bold text-slate-600 dark:text-slate-300">
-                          {estimatedHours} hr × ₹
-                          {(freelancer?.hourlyRate || 0).toLocaleString(
-                            "en-IN",
-                          )}
-                          /hr
-                        </span>
-                        <span className="text-lg font-black text-slate-900 dark:text-white">
-                          = ₹{agreedAmount.toLocaleString("en-IN")}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEstimatedHours((h) => Math.min(100, h + 1))
+                          }
+                          className="h-10 w-10 rounded-xl border border-slate-200 flex items-center justify-center dark:border-slate-800"
+                        >
+                          <Plus size={16} />
+                        </button>
                       </div>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Field-only: date, time, address */}
+              {/* Field-only: date, time, location */}
               {!isDigital && (
                 <>
                   <div className="h-px bg-slate-100 dark:bg-white/10" />
@@ -552,74 +547,125 @@ export default function BookFreelancerPage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* ── Location Mode Selector ── */}
                   <div className="h-px bg-slate-100 dark:bg-white/10" />
                   <p className="text-sm font-black text-slate-900 dark:text-white">
                     Service Location
                   </p>
-                  <div>
-                    <label className="mb-2 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
-                      Full Address <span className="text-red-500">*</span>
-                    </label>
-                    <div className="flex gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:border-violet-500 dark:border-white/10 dark:bg-slate-900">
-                      <MapPin
-                        size={18}
-                        className="mt-0.5 flex-shrink-0 text-slate-400"
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setLocationMode("current")}
+                      className={`rounded-2xl px-4 py-3 text-sm font-black transition border text-left ${locationMode === "current" ? "bg-emerald-600 text-white border-emerald-600" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-white dark:border-slate-800"}`}
+                    >
+                      <Navigation
+                        size={16}
+                        className="inline-block mr-2 mb-0.5"
                       />
-                      <textarea
-                        value={address}
-                        onChange={(e) => setAddress(e.target.value)}
-                        placeholder="Door/flat no., street, area, landmark, city…"
-                        rows={3}
-                        className="w-full resize-none bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
-                        required
-                      />
-                    </div>
+                      My Current Location
+                      <p className="text-[10px] font-bold mt-0.5 opacity-75">
+                        Auto-fetch GPS
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLocationMode("other");
+                        setLocationFetched(false);
+                        setAddress("");
+                        setClientLat(null);
+                        setClientLng(null);
+                      }}
+                      className={`rounded-2xl px-4 py-3 text-sm font-black transition border text-left ${locationMode === "other" ? "bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900 dark:border-white" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-white dark:border-slate-800"}`}
+                    >
+                      <Edit3 size={16} className="inline-block mr-2 mb-0.5" />
+                      Different Address
+                      <p className="text-[10px] font-bold mt-0.5 opacity-75">
+                        Enter manually
+                      </p>
+                    </button>
                   </div>
+
+                  {/* Scenario 1: Current location */}
+                  {locationMode === "current" && (
+                    <div>
+                      {fetchingLocation ? (
+                        <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/20 px-4 py-3">
+                          <Loader2
+                            size={16}
+                            className="animate-spin text-emerald-600"
+                          />
+                          <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">
+                            Fetching your location…
+                          </p>
+                        </div>
+                      ) : locationFetched && address ? (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/20 px-4 py-3">
+                          <div className="flex items-start gap-2">
+                            <CheckCircle2
+                              size={16}
+                              className="mt-0.5 flex-shrink-0 text-emerald-600"
+                            />
+                            <div className="flex-1">
+                              <p className="text-xs font-extrabold text-emerald-700 dark:text-emerald-300 uppercase tracking-wide mb-1">
+                                Location Captured
+                              </p>
+                              <p className="text-sm font-bold text-emerald-900 dark:text-emerald-100 break-words">
+                                {address}
+                              </p>
+                              <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                                The freelancer must be within 500m of this
+                                location to mark arrival.
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={fetchCurrentLocation}
+                            className="mt-2 text-xs font-black text-emerald-700 dark:text-emerald-300 hover:underline"
+                          >
+                            Refresh location
+                          </button>
+                        </div>
+                      ) : locationError ? (
+                        <div className="rounded-2xl border border-red-200 bg-red-50 dark:bg-red-500/10 dark:border-red-500/20 px-4 py-3">
+                          <p className="text-sm font-bold text-red-700 dark:text-red-300">
+                            {locationError}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {/* Scenario 2: Manual address */}
+                  {locationMode === "other" && (
+                    <div>
+                      <label className="mb-2 block text-sm font-extrabold text-slate-700 dark:text-slate-200">
+                        Full Address <span className="text-red-500">*</span>
+                      </label>
+                      <div className="flex gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:border-violet-500 dark:border-white/10 dark:bg-slate-900">
+                        <MapPin
+                          size={18}
+                          className="mt-0.5 flex-shrink-0 text-slate-400"
+                        />
+                        <textarea
+                          value={address}
+                          onChange={(e) => setAddress(e.target.value)}
+                          placeholder="Door/flat no., street, area, landmark, city…"
+                          rows={3}
+                          className="w-full resize-none bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
+                          required
+                        />
+                      </div>
+                      <p className="mt-1.5 text-xs font-bold text-slate-400">
+                        💡 For manual addresses, the freelancer won't have GPS
+                        verification — please share the address clearly.
+                      </p>
+                    </div>
+                  )}
                 </>
-              )}
-
-              {/* Escrow banner (digital non-hourly or hourly with mode selected) */}
-              {isDigital && !isHourlyDigital && (
-                <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/10">
-                  <div className="flex items-start gap-3">
-                    <Lock
-                      size={18}
-                      className="mt-0.5 flex-shrink-0 text-violet-600 dark:text-violet-400"
-                    />
-                    <div>
-                      <p className="text-sm font-black text-violet-900 dark:text-violet-100">
-                        Escrow Payment Protection
-                      </p>
-                      <p className="mt-1 text-xs font-bold leading-relaxed text-violet-700 dark:text-violet-300">
-                        Your payment is locked securely. Released to freelancer
-                        only after you approve their work. Raise a dispute
-                        within 7 days of delivery if unsatisfied.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Pay-at-location banner (field) */}
-              {!isDigital && (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/20 dark:bg-amber-500/10">
-                  <div className="flex items-start gap-3">
-                    <Zap
-                      size={18}
-                      className="mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400"
-                    />
-                    <div>
-                      <p className="text-sm font-black text-amber-900 dark:text-amber-100">
-                        Pay at Location — No online payment needed
-                      </p>
-                      <p className="mt-1 text-xs font-bold leading-relaxed text-amber-700 dark:text-amber-300">
-                        Booking is completely free. Pay the freelancer directly
-                        at the site (cash or UPI). Always confirm final price
-                        before work begins.
-                      </p>
-                    </div>
-                  </div>
-                </div>
               )}
 
               {error && (
@@ -628,30 +674,22 @@ export default function BookFreelancerPage() {
                 </div>
               )}
 
-              {/* Phone Warning for Digital Bookings */}
               {isDigital && (!user?.phone || !user.phone.trim()) && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-500/20 dark:bg-amber-500/10 mb-4">
-                  <div className="flex items-start gap-3">
-                    <ShieldCheck
-                      size={18}
-                      className="mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400"
-                    />
-                    <div>
-                      <p className="text-sm font-black text-amber-900 dark:text-amber-100">
-                        Mobile Number Required
-                      </p>
-                      <p className="mt-1 text-xs font-bold leading-relaxed text-amber-700 dark:text-amber-300">
-                        Please update your profile with a valid mobile number before making a payment.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => router.push("/client/profile")}
-                        className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-black text-white hover:bg-amber-700"
-                      >
-                        Update Profile
-                      </button>
-                    </div>
-                  </div>
+                  <p className="text-sm font-black text-amber-900 dark:text-amber-100">
+                    Mobile Number Required
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-amber-700 dark:text-amber-300">
+                    Please update your profile with a valid mobile number before
+                    making a payment.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => router.push("/client/profile")}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-black text-white hover:bg-amber-700"
+                  >
+                    Update Profile
+                  </button>
                 </div>
               )}
 
@@ -672,13 +710,7 @@ export default function BookFreelancerPage() {
                 ) : isDigital ? (
                   <span className="inline-flex items-center justify-center gap-2">
                     <CreditCard size={18} />
-                    Pay ₹{agreedAmount.toLocaleString("en-IN")}{" "}
-                    {isHourlyDigital && digitalPayMode === "advance"
-                      ? "(Advance)"
-                      : isHourlyDigital && digitalPayMode === "hours"
-                        ? `(${estimatedHours}h)`
-                        : ""}{" "}
-                    &amp; Confirm
+                    Pay ₹{agreedAmount.toLocaleString("en-IN")} & Confirm
                   </span>
                 ) : (
                   <span className="inline-flex items-center justify-center gap-2">
@@ -689,10 +721,9 @@ export default function BookFreelancerPage() {
             </form>
           </div>
 
-          {/* Sidebar */}
+          {/* Sidebar — freelancer summary */}
           <div className="lg:col-span-4">
             <div className="sticky top-24 space-y-4">
-              {/* Freelancer summary */}
               <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-950">
                 {loadingFreelancer ? (
                   <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
@@ -716,11 +747,6 @@ export default function BookFreelancerPage() {
                         {(fName || "F").slice(0, 1).toUpperCase()}
                       </div>
                     </div>
-                    {freelancerError && (
-                      <p className="mt-2 text-sm font-bold text-red-600">
-                        {freelancerError}
-                      </p>
-                    )}
                     <div className="mt-4 space-y-2">
                       {fCity && (
                         <div className="flex items-center gap-2 text-sm font-bold text-slate-600 dark:text-slate-300">
@@ -728,36 +754,6 @@ export default function BookFreelancerPage() {
                           {fCity}
                         </div>
                       )}
-                      <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
-                        <span className="text-xs font-extrabold uppercase text-slate-500 dark:text-slate-400">
-                          {pricingType === "fixed"
-                            ? "Fixed Price"
-                            : pricingType === "milestone"
-                              ? "Milestone Total"
-                              : "Hourly Rate"}
-                        </span>
-                        <span className="flex items-center gap-0.5 text-sm font-black text-slate-900 dark:text-white">
-                          <IndianRupee size={13} />
-                          {pricingType === "hourly"
-                            ? `${fRate || 0}/hr`
-                            : agreedAmount.toLocaleString("en-IN")}
-                        </span>
-                      </div>
-
-                      {/* Show advance amount for hourly digital */}
-                      {isHourlyDigital &&
-                        (freelancer?.advanceAmount || 0) > 0 && (
-                          <div className="flex items-center justify-between rounded-2xl bg-violet-50 dark:bg-violet-900/20 px-4 py-3 ring-1 ring-violet-500/20">
-                            <span className="text-xs font-extrabold uppercase text-violet-600 dark:text-violet-400">
-                              Advance Amount
-                            </span>
-                            <span className="flex items-center gap-0.5 text-sm font-black text-violet-700 dark:text-violet-300">
-                              <IndianRupee size={13} />
-                              {freelancer.advanceAmount.toLocaleString("en-IN")}
-                            </span>
-                          </div>
-                        )}
-
                       {typeof fRating === "number" && (
                         <div className="flex items-center gap-2">
                           <Star
@@ -778,117 +774,9 @@ export default function BookFreelancerPage() {
                         Verified Freelancer
                       </div>
                     </div>
-                    {fSkills.length > 0 && (
-                      <div className="mt-4">
-                        <p className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
-                          Skills
-                        </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {fSkills.slice(0, 6).map((s) => (
-                            <span
-                              key={s}
-                              className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                            >
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                   </>
                 )}
               </div>
-
-              {/* Payment flow explanation */}
-              {!loadingFreelancer && freelancer && (
-                <div
-                  className={`rounded-3xl p-6 ${isDigital ? "bg-violet-600 text-white" : "border border-amber-200 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10"}`}
-                >
-                  <p
-                    className={`flex items-center gap-2 text-sm font-black ${isDigital ? "text-white" : "text-amber-900 dark:text-amber-100"}`}
-                  >
-                    {isDigital ? (
-                      <>
-                        <Lock size={15} /> How Escrow Works
-                      </>
-                    ) : (
-                      <>
-                        <Zap size={15} /> How Payment Works
-                      </>
-                    )}
-                  </p>
-                  <ol className="mt-3 space-y-2">
-                    {(isDigital
-                      ? isHourlyDigital && digitalPayMode === "advance"
-                        ? [
-                            "Pay advance — funds locked securely",
-                            "Freelancer contacts you to discuss scope",
-                            "Work completed, remaining amount settled",
-                            "Approve & release payment to freelancer",
-                            "Auto-release after 7 days if no action",
-                          ]
-                        : [
-                            "Pay now — funds locked securely",
-                            "Freelancer works on your project",
-                            "Review & approve the work",
-                            "Payment released to freelancer",
-                            "Auto-release after 7 days if no action",
-                          ]
-                      : [
-                          "Book your slot — completely free",
-                          "Freelancer confirms & visits",
-                          "Work completed at your location",
-                          "Pay freelancer directly (cash/UPI)",
-                        ]
-                    ).map((step, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span
-                          className={`mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-xs font-black ${isDigital ? "bg-white/20 text-white" : "bg-amber-600 text-white"}`}
-                        >
-                          {i + 1}
-                        </span>
-                        <span
-                          className={`text-xs font-bold leading-relaxed ${isDigital ? "text-violet-100" : "text-amber-800 dark:text-amber-200"}`}
-                        >
-                          {step}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-
-              {/* Field booking preview */}
-              {!isDigital && (
-                <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-950">
-                  <p className="text-sm font-black text-slate-900 dark:text-white">
-                    Booking Summary
-                  </p>
-                  <div className="mt-3 space-y-2 text-sm font-bold">
-                    {[
-                      ["Service", serviceType || "—"],
-                      ["Date", preferredDate || "—"],
-                      ["Time", preferredTime || "—"],
-                    ].map(([k, v]) => (
-                      <div key={k} className="flex justify-between gap-4">
-                        <span className="text-slate-500">{k}</span>
-                        <span className="truncate text-right text-slate-900 dark:text-white">
-                          {v}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-4 flex items-start gap-2 rounded-2xl bg-slate-50 p-3 ring-1 ring-black/5 dark:bg-slate-900 dark:ring-white/10">
-                    <ShieldCheck
-                      size={14}
-                      className="mt-0.5 flex-shrink-0 text-emerald-500"
-                    />
-                    <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
-                      Cancel anytime before the freelancer confirms.
-                    </p>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>

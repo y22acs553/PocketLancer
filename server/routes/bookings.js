@@ -13,12 +13,13 @@ import {
   sendBookingConfirmed,
   sendBookingCompleted,
   sendBookingCancelled,
+  sendBookingRejected,
+  sendRefundInitiated,
 } from "../services/notificationService.js";
 import { notify } from "../utils/notify.js";
 
 const router = express.Router();
 
-// Singleton Razorpay client
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
@@ -35,13 +36,12 @@ function computeAgreedAmount(freelancer, durationMinutes, overrideHours) {
     return parseFloat(
       (overrideHours * (freelancer.hourlyRate || 0)).toFixed(2),
     );
-
   switch (freelancer.pricingType) {
     case "fixed":
       return freelancer.fixedPrice || 0;
     case "milestone":
       return (freelancer.milestones || []).reduce((s, m) => s + m.amount, 0);
-    default: // hourly
+    default:
       return parseFloat(
         ((durationMinutes / 60) * (freelancer.hourlyRate || 0)).toFixed(2),
       );
@@ -55,6 +55,51 @@ function verifyRazorpaySignature(orderId, paymentId, signature) {
     .digest("hex");
   return expected === signature;
 }
+
+// ── Haversine distance (km) between two GPS points ────────────────
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ── GET /api/bookings/field-today (freelancer dashboard) ──────────
+// Returns today's field bookings for the quick-arrive panel
+router.get(
+  "/field-today",
+  protect,
+  authorize("freelancer"),
+  async (req, res) => {
+    try {
+      const fl = await Freelancer.findOne({ user: req.user._id }).lean();
+      if (!fl) return res.json({ success: true, data: [] });
+
+      const today = new Date().toISOString().split("T")[0];
+
+      const bookings = await Booking.find({
+        freelancerId: fl._id,
+        serviceCategory: "field",
+        status: { $in: ["confirmed", "in_progress"] },
+        preferredDate: today,
+      })
+        .populate("clientId", "name phone avatar")
+        .sort({ preferredTime: 1 })
+        .lean();
+
+      return res.json({ success: true, data: bookings });
+    } catch (err) {
+      console.error("FIELD TODAY ERROR:", err);
+      return res.status(500).json({ msg: "Server error" });
+    }
+  },
+);
 
 // ── GET /api/bookings/mybookings ──────────────────────────────────
 router.get("/mybookings", protect, async (req, res) => {
@@ -121,6 +166,10 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     address,
     advancePayment,
     estimatedHours,
+    // ✅ GPS fields from book page location picker
+    locationMode, // "current" | "manual"
+    clientLat,
+    clientLng,
   } = req.body;
 
   try {
@@ -135,22 +184,17 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       return res.status(404).json({ msg: "Freelancer not found" });
 
     if (!freelancer.user?.phone?.trim())
-      return res
-        .status(400)
-        .json({
-          msg: "This freelancer has not added their mobile number yet.",
-        });
+      return res.status(400).json({
+        msg: "This freelancer has not added their mobile number yet.",
+      });
 
     const isDigital = freelancer.category === "digital";
 
     if (!isDigital) {
       if (!preferredDate || !preferredTime || !address)
-        return res
-          .status(400)
-          .json({
-            msg: "Date, time, and address are required for field bookings",
-          });
-
+        return res.status(400).json({
+          msg: "Date, time, and address are required for field bookings",
+        });
       if (preferredDate < new Date().toISOString().split("T")[0])
         return res.status(400).json({ msg: "Cannot book a past date." });
     }
@@ -165,7 +209,6 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     if (isNaN(startTime.getTime())) startTime = new Date();
     const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
 
-    // Conflict check for field bookings
     if (!isDigital) {
       const conflict = await Booking.exists({
         freelancerId: freelancer._id,
@@ -196,11 +239,9 @@ router.post("/", protect, authorize("client"), async (req, res) => {
         );
         bookingMode = "hours";
       } else {
-        return res
-          .status(400)
-          .json({
-            msg: "Specify advance payment or estimated hours for hourly digital services.",
-          });
+        return res.status(400).json({
+          msg: "Specify advance payment or estimated hours for hourly digital services.",
+        });
       }
     } else {
       agreedAmount = computeAgreedAmount(freelancer, durationMinutes, 0);
@@ -217,7 +258,6 @@ router.post("/", protect, authorize("client"), async (req, res) => {
           }))
         : [];
 
-    // Digital deadline: 3 days from now
     const deadline = isDigital
       ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
       : undefined;
@@ -243,6 +283,10 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       bookingMode,
       paymentStatus: isDigital ? "unpaid" : "field_pending",
       deadline,
+      // ✅ Store GPS mode + client coords for arrival proximity check
+      locationMode: locationMode || "manual",
+      clientLat: clientLat ? parseFloat(clientLat) : undefined,
+      clientLng: clientLng ? parseFloat(clientLng) : undefined,
     });
 
     await sendBookingCreated(freelancer.user._id, booking._id, {
@@ -266,11 +310,9 @@ router.post(
     try {
       const clientUser = await User.findById(req.user._id).lean();
       if (!clientUser?.phone?.trim())
-        return res
-          .status(400)
-          .json({
-            msg: "Please add your mobile number before making a payment.",
-          });
+        return res.status(400).json({
+          msg: "Please add your mobile number before making a payment.",
+        });
 
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ msg: "Booking not found" });
@@ -353,7 +395,6 @@ router.post(
       booking.paymentStatus = "held";
       booking.escrowAmount = booking.agreedAmount;
       booking.paidAt = new Date();
-      // Auto-release 7 days after payment (if client delays approval)
       booking.autoReleaseAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       await booking.save();
 
@@ -361,7 +402,7 @@ router.post(
       if (fl?.user) {
         await notify({
           userId: fl.user,
-          type: "payment_released",
+          type: "payment_received",
           message: `₹${booking.agreedAmount.toLocaleString("en-IN")} received in escrow for "${booking.serviceType}". Start working!`,
           link: `/freelancer/bookings`,
         });
@@ -380,7 +421,6 @@ router.post(
 );
 
 // ── POST /api/bookings/:id/payment/release ────────────────────────
-// Client approves digital work and releases escrow
 router.post(
   "/:id/payment/release",
   protect,
@@ -409,7 +449,6 @@ router.post(
       booking.status = "completed";
       await booking.save();
 
-      // Reward both parties +2 for clean completion
       await rewardScore(req.user._id, 2);
 
       const fl = await Freelancer.findById(booking.freelancerId).lean();
@@ -468,7 +507,7 @@ router.post(
 
       await notify({
         userId: booking.clientId,
-        type: "payment_released",
+        type: "refund_initiated",
         message: `₹${booking.refundedAmount.toLocaleString("en-IN")} refunded for "${booking.serviceType}".`,
         link: `/bookings/${booking._id}`,
       });
@@ -488,8 +527,16 @@ router.patch(
   authorize("freelancer"),
   async (req, res) => {
     const { status } = req.body;
+
+    // ✅ "rejected" added — allows freelancer to decline pending bookings
     if (
-      !["confirmed", "in_progress", "completed", "cancelled"].includes(status)
+      ![
+        "confirmed",
+        "in_progress",
+        "completed",
+        "cancelled",
+        "rejected",
+      ].includes(status)
     )
       return res.status(400).json({ msg: "Invalid status" });
 
@@ -501,10 +548,10 @@ router.patch(
       if (!fl || booking.freelancerId.toString() !== fl._id.toString())
         return res.status(403).json({ msg: "Unauthorized" });
 
-      if (booking.status === "cancelled")
+      if (["cancelled", "rejected"].includes(booking.status))
         return res
           .status(400)
-          .json({ msg: "Cannot update a cancelled booking" });
+          .json({ msg: "Cannot update a cancelled or rejected booking" });
       if (booking.disputeLocked)
         return res
           .status(400)
@@ -519,15 +566,20 @@ router.patch(
             .json({ msg: "The work date has not arrived yet." });
       }
 
+      // ✅ Only pending bookings can be rejected
+      if (status === "rejected" && booking.status !== "pending")
+        return res
+          .status(400)
+          .json({ msg: "Only pending bookings can be rejected" });
+
+      // ✅ Capture old status BEFORE overwriting — needed for honor score checks below
+      const previousStatus = booking.status;
       let newStatus = status;
 
       if (status === "completed") {
         if (booking.serviceCategory === "digital") {
-          // Digital: go to in_progress (client must approve + release)
           newStatus = "in_progress";
         } else {
-          // Field: go to pending_approval (client must confirm)
-          // Require arrival verification for field bookings
           if (!booking.arrivalVerified) {
             return res.status(400).json({
               msg: "Please mark your arrival at the client location before completing the booking.",
@@ -537,15 +589,57 @@ router.patch(
         }
       }
 
+      // ✅ Handle rejection + auto-refund
+      if (status === "rejected") {
+        booking.status = "rejected";
+
+        // If client already paid (digital escrow), auto-refund immediately
+        if (booking.paymentStatus === "held" && booking.razorpayPaymentId) {
+          try {
+            const paise = Math.round((booking.escrowAmount || 0) * 100);
+            const refund = await razorpay.payments.refund(
+              booking.razorpayPaymentId,
+              { amount: paise },
+            );
+            booking.paymentStatus = "refunded";
+            booking.refundedAmount = booking.escrowAmount;
+            booking.razorpayRefundId = refund.id;
+            booking.refundedAt = new Date();
+
+            await sendRefundInitiated(booking.clientId, booking._id, {
+              serviceType: booking.serviceType,
+              amount: booking.escrowAmount,
+            });
+          } catch (refundErr) {
+            console.error("AUTO-REFUND ON REJECT ERROR:", refundErr.message);
+          }
+        }
+
+        await booking.save();
+        await sendBookingRejected(booking.clientId, booking._id, {
+          serviceType: booking.serviceType,
+        });
+
+        return res.json({ success: true, booking });
+      }
+
       booking.status = newStatus;
       await booking.save();
 
       const meta = { serviceType: booking.serviceType };
+
       if (status === "confirmed") {
         await sendBookingConfirmed(booking.clientId, booking._id, meta);
+        // ✅ Reward freelancer +1 for accepting promptly
+        await rewardScore(req.user._id, 1);
+        await notify({
+          userId: req.user._id,
+          type: "honor_score_changed",
+          message: `Honor Score +1 for confirming booking: "${booking.serviceType}".`,
+          link: `/freelancer/bookings`,
+        });
       } else if (status === "completed") {
         if (booking.serviceCategory === "digital") {
-          // Notify client to review and release
           await notify({
             userId: booking.clientId,
             type: "booking_completed",
@@ -553,7 +647,6 @@ router.patch(
             link: `/bookings/${booking._id}`,
           });
         } else {
-          // Field: notify client to confirm
           await notify({
             userId: booking.clientId,
             type: "booking_completed",
@@ -563,13 +656,19 @@ router.patch(
         }
       } else if (status === "cancelled") {
         await sendBookingCancelled(booking.clientId, booking._id, meta);
-        // Penalise freelancer for cancelling confirmed bookings
-        if (["confirmed", "in_progress"].includes(booking.status)) {
+        // ✅ Penalise using previousStatus (booking.status is now "cancelled")
+        if (["confirmed", "in_progress"].includes(previousStatus)) {
           await deductScore(
             req.user._id,
             5,
-            `Cancelled booking "${booking.serviceType}"`,
+            `Cancelled confirmed booking "${booking.serviceType}"`,
           );
+          await notify({
+            userId: req.user._id,
+            type: "honor_score_changed",
+            message: `Honor Score −5 for cancelling a confirmed booking: "${booking.serviceType}".`,
+            link: `/freelancer/bookings`,
+          });
         }
       }
 
@@ -577,6 +676,83 @@ router.patch(
     } catch (err) {
       console.error("UPDATE STATUS ERROR:", err);
       return res.status(500).json({ msg: "Failed to update booking status" });
+    }
+  },
+);
+
+// ── POST /api/bookings/quick-arrive (freelancer dashboard one-tap) ─
+// Convenience endpoint used by the "Today's Field Jobs" panel
+router.post(
+  "/quick-arrive",
+  protect,
+  authorize("freelancer"),
+  async (req, res) => {
+    try {
+      const { bookingId, latitude, longitude } = req.body;
+      if (!bookingId || latitude === undefined || longitude === undefined)
+        return res
+          .status(400)
+          .json({ msg: "bookingId and GPS coordinates required" });
+
+      const lat = parseFloat(latitude);
+      const lng = parseFloat(longitude);
+      if (isNaN(lat) || isNaN(lng))
+        return res.status(400).json({ msg: "Invalid coordinates" });
+
+      const booking = await Booking.findById(bookingId);
+      if (!booking) return res.status(404).json({ msg: "Booking not found" });
+
+      const fl = await Freelancer.findOne({ user: req.user._id });
+      if (!fl || booking.freelancerId.toString() !== fl._id.toString())
+        return res.status(403).json({ msg: "Unauthorized" });
+
+      if (booking.serviceCategory !== "field")
+        return res.status(400).json({ msg: "Field bookings only" });
+
+      if (!["confirmed", "in_progress"].includes(booking.status))
+        return res
+          .status(400)
+          .json({ msg: "Booking is not in a confirmable state" });
+
+      if (booking.arrivalVerified)
+        return res.status(400).json({ msg: "Arrival already marked" });
+
+      // ✅ GPS proximity check — only when client shared their location
+      if (
+        booking.locationMode === "current" &&
+        booking.clientLat &&
+        booking.clientLng
+      ) {
+        const distKm = haversineKm(
+          lat,
+          lng,
+          booking.clientLat,
+          booking.clientLng,
+        );
+        if (distKm > 0.5)
+          return res.status(400).json({
+            msg: `You must be within 500m of the client location to mark arrival. You are ${(distKm * 1000).toFixed(0)}m away.`,
+          });
+      }
+
+      booking.arrivedAt = new Date();
+      booking.arrivalLat = lat;
+      booking.arrivalLng = lng;
+      booking.arrivalVerified = true;
+      if (booking.status === "confirmed") booking.status = "in_progress";
+      await booking.save();
+
+      await notify({
+        userId: booking.clientId,
+        type: "freelancer_arrived",
+        message: `Your freelancer has arrived for "${booking.serviceType}".`,
+        link: `/bookings/${booking._id}`,
+      });
+
+      return res.json({ success: true, booking });
+    } catch (err) {
+      console.error("QUICK ARRIVE ERROR:", err);
+      return res.status(500).json({ msg: "Server error" });
     }
   },
 );
@@ -614,6 +790,24 @@ router.patch(
           .status(400)
           .json({ msg: "Cannot mark arrival for this booking status" });
 
+      // ✅ GPS proximity check — only when client shared their location
+      if (
+        booking.locationMode === "current" &&
+        booking.clientLat &&
+        booking.clientLng
+      ) {
+        const distKm = haversineKm(
+          lat,
+          lng,
+          booking.clientLat,
+          booking.clientLng,
+        );
+        if (distKm > 0.5)
+          return res.status(400).json({
+            msg: `You must be within 500m of the client location. You are ${(distKm * 1000).toFixed(0)}m away.`,
+          });
+      }
+
       booking.arrivedAt = new Date();
       booking.arrivalLat = lat;
       booking.arrivalLng = lng;
@@ -623,7 +817,7 @@ router.patch(
 
       await notify({
         userId: booking.clientId,
-        type: "booking_confirmed",
+        type: "freelancer_arrived",
         message: `Your freelancer has arrived at your location for "${booking.serviceType}".`,
         link: `/bookings/${booking._id}`,
       });
@@ -636,7 +830,7 @@ router.patch(
   },
 );
 
-// ── PATCH /api/bookings/:id/confirm-field (client confirms field work) ─
+// ── PATCH /api/bookings/:id/confirm-field ─────────────────────────
 router.patch(
   "/:id/confirm-field",
   protect,
@@ -663,7 +857,6 @@ router.patch(
       booking.paymentStatus = "field_paid";
       await booking.save();
 
-      // Reward both parties +2 for clean completion
       await rewardScore(req.user._id, 2);
 
       const fl = await Freelancer.findById(booking.freelancerId).lean();

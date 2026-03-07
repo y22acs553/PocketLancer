@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import socket from "@/services/socket";
 import { useUser } from "@/context/UserContext";
 import api from "@/services/api";
+import HeaderSearch from "@/components/HeaderSearch";
 
 import {
   LayoutDashboard,
@@ -228,8 +229,6 @@ export default function DashboardHeader() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unread, setUnread] = useState(0);
   const [markingAll, setMarkingAll] = useState(false);
-  const [search, setSearch] = useState("");
-
   const [desktopMenuOpen, setDesktopMenuOpen] = useState(false);
   const [desktopNotifOpen, setDesktopNotifOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -366,16 +365,6 @@ export default function DashboardHeader() {
     window.location.href = href;
   };
 
-  const handleSearch = () => {
-    const q = search.trim();
-    if (!q) return;
-    router.push(
-      userRole === "client"
-        ? `/search?skills=${encodeURIComponent(q)}`
-        : `/bookings?q=${encodeURIComponent(q)}`,
-    );
-  };
-
   // ── Nav links per role ────────────────────────────────────────
   const links = useMemo(() => {
     if (!userRole) return [];
@@ -416,7 +405,6 @@ export default function DashboardHeader() {
         href: "/dashboard/client",
         icon: <LayoutDashboard size={18} />,
       },
-      { label: "Search", href: "/search", icon: <SearchIcon size={18} /> },
       {
         label: "Bookings",
         href: "/bookings",
@@ -559,25 +547,8 @@ export default function DashboardHeader() {
             })}
           </nav>
 
-          {/* Search — xl+ */}
-          <div className="hidden xl:flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 focus-within:ring-2 focus-within:ring-slate-300">
-            <SearchIcon size={15} className="text-slate-400 shrink-0" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              placeholder={
-                userRole === "client" ? "Search skills…" : "Search bookings…"
-              }
-              className="w-48 bg-transparent outline-none text-sm font-bold text-slate-900 placeholder:text-slate-400"
-            />
-            <button
-              onClick={handleSearch}
-              className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-700 transition shrink-0"
-            >
-              Search
-            </button>
-          </div>
+          {/* Typeahead search — clients only, xl+ */}
+          {userRole === "client" && <HeaderSearch />}
 
           {/* Right controls */}
           <div className="flex items-center gap-2">

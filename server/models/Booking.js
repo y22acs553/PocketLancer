@@ -47,8 +47,18 @@ const BookingSchema = new mongoose.Schema(
     preferredTime: { type: String, default: "" },
     address: { type: String, trim: true, default: "" },
 
+    // ── Field booking geo-location ─────────────────────────────────
+    /** "current" = client shared their live GPS; "other" = manually typed address */
+    locationMode: {
+      type: String,
+      enum: ["current", "other"],
+      default: "other",
+    },
+    /** GPS coordinates provided by client at booking time (locationMode === "current") */
+    clientLat: { type: Number },
+    clientLng: { type: Number },
+
     // ── Status ─────────────────────────────────────────────────────
-    // pending_approval: field freelancer marked done, awaiting client confirm
     status: {
       type: String,
       enum: [
@@ -59,6 +69,7 @@ const BookingSchema = new mongoose.Schema(
         "completed",
         "cancelled",
         "disputed",
+        "rejected", // ← NEW: freelancer explicitly rejected
       ],
       default: "pending",
     },
@@ -106,6 +117,9 @@ const BookingSchema = new mongoose.Schema(
     deadline: { type: Date },
     /** Digital: if client doesn't release after freelancer done → auto release */
     autoReleaseAt: { type: Date },
+
+    // ── Review tracking ────────────────────────────────────────────
+    reviewed: { type: Boolean, default: false },
 
     // ── Field arrival tracking ─────────────────────────────────────
     arrivedAt: { type: Date },

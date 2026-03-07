@@ -1,5 +1,7 @@
+// server/routes/notifications.js
 import express from "express";
 import Notification from "../models/Notification.js";
+import DeviceToken from "../models/DeviceToken.js";
 import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
@@ -54,6 +56,41 @@ router.patch("/read-all", protect, async (req, res) => {
   } catch (err) {
     console.error("MARK ALL READ ERROR:", err);
     res.status(500).json({ msg: "Failed to mark all as read" });
+  }
+});
+
+// ── POST /api/notifications/register-token ────────────────────────
+// Registers (or updates) the FCM device token for the logged-in user.
+// Called from the Capacitor app on every launch after permission granted.
+router.post("/register-token", protect, async (req, res) => {
+  try {
+    const { fcmToken, platform = "android" } = req.body;
+    if (!fcmToken?.trim())
+      return res.status(400).json({ msg: "fcmToken is required" });
+
+    // Upsert: one token per user, update if changed
+    await DeviceToken.findOneAndUpdate(
+      { user: req.user._id },
+      { fcmToken: fcmToken.trim(), platform },
+      { upsert: true, new: true },
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("REGISTER TOKEN ERROR:", err);
+    res.status(500).json({ msg: "Failed to register device token" });
+  }
+});
+
+// ── DELETE /api/notifications/register-token ─────────────────────
+// Removes FCM token on logout so the user stops receiving push notifications
+router.delete("/register-token", protect, async (req, res) => {
+  try {
+    await DeviceToken.findOneAndDelete({ user: req.user._id });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("DEREGISTER TOKEN ERROR:", err);
+    res.status(500).json({ msg: "Failed to remove device token" });
   }
 });
 

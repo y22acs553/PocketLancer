@@ -58,7 +58,30 @@ const serialize = (u) => ({
   role: u.role,
   avatar: u.avatar || "",
   honorScore: typeof u.honorScore === "number" ? u.honorScore : 100,
+  username: u.username || null,
 });
+
+/* ── Username generator ────────────────────────────────────────── */
+async function generateUsername(name) {
+  // "Dedeep Reddy" → "dedeep-reddy"
+  let base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 30);
+
+  let candidate = base;
+  let counter = 0;
+
+  while (await User.exists({ username: candidate })) {
+    counter++;
+    candidate = `${base}-${counter}`;
+  }
+
+  return candidate;
+}
 
 // ── 1. REGISTER ────────────────────────────────────────────────────
 router.post("/register", async (req, res) => {
@@ -76,6 +99,8 @@ router.post("/register", async (req, res) => {
       password,
       role: role === "freelancer" ? "freelancer" : "client",
     });
+    // Generate SEO-friendly username from name
+    user.username = await generateUsername(name);
     await user.save();
 
     if (
