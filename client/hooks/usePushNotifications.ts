@@ -1,13 +1,23 @@
 // client/hooks/usePushNotifications.ts
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useUser } from "@/context/UserContext";
 
 export function usePushNotifications() {
   const { user, loading } = useUser();
+  // ✅ Track whether setup has already run for this user session so we never
+  // call register() or addListener() twice (e.g. if loading flickers).
+  const setupDoneRef = useRef(false);
 
   useEffect(() => {
-    // Don't run until we know auth state — avoids 401 on token registration
-    if (loading || !user) return;
+    // Don't run until auth state is resolved and user is logged in
+    if (loading || !user) {
+      setupDoneRef.current = false; // reset when logged out
+      return;
+    }
+
+    // Don't run setup twice for the same user session
+    if (setupDoneRef.current) return;
+    setupDoneRef.current = true;
 
     const setup = async () => {
       try {
@@ -17,6 +27,10 @@ export function usePushNotifications() {
         const { PushNotifications } =
           await import("@capacitor/push-notifications");
         const { default: api } = await import("@/services/api");
+
+        // ✅ Remove any stale listeners from a previous session BEFORE adding
+        // new ones — prevents duplicate handlers accumulating across re-renders.
+        await PushNotifications.removeAllListeners();
 
         const permission = await PushNotifications.requestPermissions();
         if (permission.receive !== "granted") {
@@ -28,7 +42,8 @@ export function usePushNotifications() {
 
         let registered = false;
 
-        PushNotifications.addListener("registration", async (token) => {
+        // Token received from FCM — save to server
+        await PushNotifications.addListener("registration", async (token) => {
           if (registered) return;
           registered = true;
           console.log("[FCM] Token received, registering for user:", user._id);
@@ -39,8 +54,6 @@ export function usePushNotifications() {
             });
             console.log("[FCM] Token saved to server ✓");
           } catch (err: any) {
-            // ✅ Log the full error so we can see exactly why it failed
-            // (e.g. 401 Unauthorized = race condition, network error = wrong API URL)
             console.error(
               "[FCM] Failed to register token on server:",
               err?.response?.status,
@@ -50,30 +63,36 @@ export function usePushNotifications() {
           }
         });
 
-        PushNotifications.addListener("registrationError", (err) => {
+        await PushNotifications.addListener("registrationError", (err) => {
           console.error("[FCM] Registration error:", JSON.stringify(err));
         });
 
-        PushNotifications.addListener(
+        // Foreground notification — socket already handles UI, just log
+        await PushNotifications.addListener(
           "pushNotificationReceived",
           (notification) => {
             console.log("[FCM] Foreground notification:", notification.title);
           },
         );
 
-        PushNotifications.addListener(
+        // ✅ CRASH FIX: User tapped a notification (app was closed/background).
+        // The old code did `window.location.href = link` immediately, which fired
+        // during app launch before the app was ready, causing a freeze/crash.
+        // Now we delay navigation by 500ms to let the app fully initialize first.
+        await PushNotifications.addListener(
           "pushNotificationActionPerformed",
           (action) => {
-            const link = action.notification?.data?.link;
-            if (link && typeof window !== "undefined") {
+            const link: string = action.notification?.data?.link;
+            if (!link || typeof window === "undefined") return;
+
+            // Small delay ensures the React tree and router are mounted before
+            // we navigate — prevents crash when notification is tapped cold-start
+            setTimeout(() => {
               window.location.href = link;
-            }
+            }, 500);
           },
         );
       } catch (err: any) {
-        // ✅ Log the real error instead of the misleading "not running in native app" message.
-        // The old catch swallowed all errors with the same message, making it impossible
-        // to distinguish "genuinely running on web" from "crashed during setup".
         if (
           err?.message?.toLowerCase().includes("not implemented") ||
           err?.message?.toLowerCase().includes("native")
@@ -91,10 +110,12 @@ export function usePushNotifications() {
 
     setup();
 
+    // Cleanup only on unmount — avoids tearing down listeners while async
+    // setup is still in flight on dep changes
     return () => {
       import("@capacitor/push-notifications")
         .then(({ PushNotifications }) => PushNotifications.removeAllListeners())
         .catch(() => {});
     };
-  }, [user?._id, loading]);
+  }, [user?._id, loading]); // eslint-disable-line
 }

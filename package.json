@@ -15,6 +15,7 @@
     "@capacitor/cli": "^8.0.2",
     "@capacitor/core": "^8.0.2",
     "@capacitor/geolocation": "^8.0.0",
+    "@capacitor/push-notifications": "^8.0.2",
     "react-modal": "^3.16.3"
   },
   "devDependencies": {
