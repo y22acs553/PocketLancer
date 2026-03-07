@@ -72,7 +72,6 @@ function SearchInner() {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
-  // Prevent double-firing the initial load
   const didInit = useRef(false);
 
   // ── Helpers ───────────────────────────────────────────────────
@@ -95,6 +94,7 @@ function SearchInner() {
       setHasSearched(true);
       const params: any = { category: cat, skills: committedSkills };
       if (cat === "field") {
+        // Use cached coords if available to avoid redundant GPS call
         const pos = coords ?? (await getCurrentLocation());
         setCoords(pos);
         params.latitude = pos.latitude;
@@ -104,9 +104,7 @@ function SearchInner() {
       const res = await api.get("/freelancers/search", { params });
       setFreelancers(applySort(res.data.freelancers || []));
     } catch (err: any) {
-      // ✅ FIX: Distinguish location errors from API/network errors so we don't
-      // show a misleading "allow location access" message when the real problem
-      // is a failed API call or network issue (common on Android with Render).
+      // ✅ Distinguish GPS/location errors from API/network errors
       const msg: string = err?.message ?? "";
       const isLocationError =
         cat === "field" &&
@@ -145,32 +143,51 @@ function SearchInner() {
   const handleClear = () => {
     setSkillsInput("");
     setSkills("");
-    searchNearby("");
+    setError("");
+    setHasSearched(false);
+    setFreelancers([]);
   };
 
-  // ── Read ?skills= from URL — fires on mount AND when URL changes ─
-  // This makes the header typeahead "See all results" work even when
-  // the user is already on /search.
+  // ── Read ?skills= from URL ────────────────────────────────────
+  // Only auto-searches when a skill query is in the URL (e.g. from the
+  // header typeahead). For field services with NO incoming query we do NOT
+  // auto-search on mount — that would cold-start GPS immediately and time
+  // out on Android before the user taps anything.
   useEffect(() => {
     const incoming = searchParams.get("skills") || "";
-    if (!didInit.current || incoming !== skills) {
-      didInit.current = true;
-      if (incoming) {
-        setSkillsInput(incoming);
-        setSkills(incoming);
-        searchNearby(incoming);
-      } else {
-        searchNearby("");
-      }
+
+    if (didInit.current && incoming === skills) return;
+    didInit.current = true;
+
+    if (incoming) {
+      setSkillsInput(incoming);
+      setSkills(incoming);
+      searchNearby(incoming);
+    } else if (category === "digital") {
+      // Digital search has no GPS dependency — safe to auto-load
+      searchNearby("");
     }
-  }, [searchParams]); // re-runs whenever URL params change
+    // Field with no incoming query: wait for user to tap Search
+  }, [searchParams]); // eslint-disable-line
 
   useEffect(() => {
     setFreelancers((prev) => applySort(prev));
   }, [sortMode]); // eslint-disable-line
 
+  // When switching category, re-search only if safe to do so
   useEffect(() => {
-    if (didInit.current) searchNearby("", category);
+    if (!didInit.current) return;
+    if (category === "digital") {
+      searchNearby(skills, category);
+    } else if (coords) {
+      // We already have coords cached — re-run field search instantly
+      searchNearby(skills, category);
+    } else {
+      // Switching to field with no cached coords — let user tap Search
+      setFreelancers([]);
+      setHasSearched(false);
+      setError("");
+    }
   }, [category]); // eslint-disable-line
 
   const canShowMap = category === "field" && coords !== null;
@@ -187,7 +204,6 @@ function SearchInner() {
     return "Sorted by rating";
   }, [sortMode, category]);
 
-  // ── Filter pill set ──────────────────────────────────────────
   const sortOptions =
     category === "field"
       ? [
@@ -200,21 +216,12 @@ function SearchInner() {
           { id: "toprated" as SortMode, label: "Top Rated" },
         ];
 
-  // ── Render ────────────────────────────────────────────────────
-
   return (
     <>
-      {/*
-        ─────────────────────────────────────────────────────────────
-        DESKTOP lg+  —  55% results | 45% map
-        ─────────────────────────────────────────────────────────────
-      */}
+      {/* DESKTOP lg+ */}
       <div className="hidden lg:flex h-[calc(100vh-65px)] overflow-hidden bg-slate-50 dark:bg-slate-950">
-        {/* ── Left: results panel (grows to fill) ── */}
         <div className="w-[55%] flex-shrink-0 flex flex-col border-r border-slate-200 dark:border-white/10 bg-white dark:bg-slate-950 overflow-hidden">
-          {/* Search controls — sticky */}
           <div className="flex-shrink-0 px-4 pt-5 pb-3 border-b border-slate-100 dark:border-white/10 space-y-3">
-            {/* Category toggle */}
             <div className="flex gap-2">
               {(["field", "digital"] as const).map((cat) => (
                 <button
@@ -230,8 +237,6 @@ function SearchInner() {
                 </button>
               ))}
             </div>
-
-            {/* Search input */}
             <div className="flex gap-2">
               <div className="flex-1 flex items-center gap-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-900 px-3 py-2.5 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500 transition">
                 <Search size={14} className="text-slate-400 flex-shrink-0" />
@@ -266,8 +271,6 @@ function SearchInner() {
                 Search
               </button>
             </div>
-
-            {/* Filters */}
             <div className="flex flex-wrap gap-2 items-center">
               {category === "field" && (
                 <div className="flex items-center gap-1.5">
@@ -304,8 +307,6 @@ function SearchInner() {
               </div>
             </div>
           </div>
-
-          {/* Result count bar */}
           <div className="flex-shrink-0 px-4 py-2.5 border-b border-slate-100 dark:border-white/10">
             <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
               {loading
@@ -315,8 +316,6 @@ function SearchInner() {
                   : "Enter a skill or tap Search"}
             </p>
           </div>
-
-          {/* Scrollable results */}
           <div className="flex-1 overflow-y-auto">
             {error && (
               <div className="m-4 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 px-4 py-3 text-xs font-bold text-red-700 dark:text-red-300">
@@ -329,7 +328,7 @@ function SearchInner() {
                   <CardSkeleton key={i} />
                 ))}
               </div>
-            ) : hasSearched && freelancers.length === 0 ? (
+            ) : hasSearched && freelancers.length === 0 && !error ? (
               <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400 px-6 text-center">
                 <Users size={32} className="opacity-30" />
                 <p className="text-sm font-black text-slate-500 dark:text-slate-400">
@@ -354,8 +353,6 @@ function SearchInner() {
             )}
           </div>
         </div>
-
-        {/* ── Right: Map — fixed 440px wide ── */}
         <div className="w-[45%] flex-shrink-0 relative">
           {canShowMap ? (
             <FreelancerMiniMap center={coords!} freelancers={freelancers} />
@@ -372,16 +369,10 @@ function SearchInner() {
         </div>
       </div>
 
-      {/*
-        ─────────────────────────────────────────────────────────────
-        MOBILE < lg
-        ─────────────────────────────────────────────────────────────
-      */}
+      {/* MOBILE < lg */}
       <div className="lg:hidden flex flex-col min-h-screen bg-slate-50 dark:bg-slate-950 pb-24">
-        {/* Sticky search bar */}
         <div className="sticky top-0 z-30 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-white/10 shadow-sm">
           <div className="px-4 pt-4 pb-3 space-y-3">
-            {/* Category toggle */}
             <div className="grid grid-cols-2 gap-2">
               {(["field", "digital"] as const).map((cat) => (
                 <button
@@ -397,8 +388,6 @@ function SearchInner() {
                 </button>
               ))}
             </div>
-
-            {/* Search row */}
             <div className="flex gap-2">
               <div className="flex-1 flex items-center gap-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-900 px-3 py-2.5">
                 <Search size={14} className="text-slate-400 flex-shrink-0" />
@@ -438,8 +427,6 @@ function SearchInner() {
                 <SlidersHorizontal size={14} />
               </button>
             </div>
-
-            {/* Expandable filters */}
             {filtersOpen && (
               <div className="space-y-3 pt-1 pb-1">
                 {category === "field" && (
@@ -451,11 +438,7 @@ function SearchInner() {
                       <button
                         key={r}
                         onClick={() => setRadiusKm(r)}
-                        className={`rounded-lg px-3 py-1 text-xs font-black transition ${
-                          radiusKm === r
-                            ? "bg-blue-600 text-white"
-                            : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
-                        }`}
+                        className={`rounded-lg px-3 py-1 text-xs font-black transition ${radiusKm === r ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"}`}
                       >
                         {r}km
                       </button>
@@ -470,11 +453,7 @@ function SearchInner() {
                     <button
                       key={id}
                       onClick={() => setSortMode(id)}
-                      className={`rounded-lg px-3 py-1 text-xs font-black transition ${
-                        sortMode === id
-                          ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                          : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
-                      }`}
+                      className={`rounded-lg px-3 py-1 text-xs font-black transition ${sortMode === id ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"}`}
                     >
                       {label}
                     </button>
@@ -484,8 +463,6 @@ function SearchInner() {
             )}
           </div>
         </div>
-
-        {/* Content — list only on mobile */}
         <div className="flex-1">
           <div className="px-4 py-2.5 border-b border-slate-100 dark:border-white/10">
             <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
@@ -493,7 +470,9 @@ function SearchInner() {
                 ? "Searching…"
                 : hasSearched
                   ? `${resultCount} freelancer${resultCount !== 1 ? "s" : ""} found${skills ? ` for "${skills}"` : ""}`
-                  : "Search to find freelancers near you"}
+                  : category === "field"
+                    ? "Tap Search to find freelancers near you"
+                    : "Searching digital freelancers…"}
             </p>
           </div>
           {error && (
@@ -507,7 +486,7 @@ function SearchInner() {
                 <CardSkeleton key={i} />
               ))}
             </div>
-          ) : hasSearched && freelancers.length === 0 ? (
+          ) : hasSearched && freelancers.length === 0 && !error ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400 px-6 text-center">
               <Users size={32} className="opacity-30" />
               <p className="text-sm font-black text-slate-500 dark:text-slate-400">
@@ -535,8 +514,6 @@ function SearchInner() {
     </>
   );
 }
-
-// ── Suspense wrapper — required by Next.js App Router for useSearchParams ─
 
 export default function SearchPage() {
   return (

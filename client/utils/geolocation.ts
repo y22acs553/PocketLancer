@@ -7,7 +7,33 @@ function isNative(): boolean {
   return !!(cap?.isNativePlatform?.() || cap?.Plugins?.Geolocation);
 }
 
-/** Get precise GPS coordinates — uses Capacitor on Android, browser API on web */
+/**
+ * Extracts lat/lng from a Capacitor GeolocationPosition, throwing a clear
+ * error if the position or coords are undefined (happens on some Android
+ * devices where getCurrentPosition resolves but returns a malformed object).
+ */
+function extractCoords(pos: any): { latitude: number; longitude: number } {
+  const lat = pos?.coords?.latitude;
+  const lng = pos?.coords?.longitude;
+  if (
+    typeof lat !== "number" ||
+    typeof lng !== "number" ||
+    isNaN(lat) ||
+    isNaN(lng)
+  ) {
+    throw new Error("GPS returned an invalid position — please try again.");
+  }
+  return { latitude: lat, longitude: lng };
+}
+
+/**
+ * Get GPS coordinates — uses Capacitor on Android/iOS, browser API on web.
+ *
+ * Strategy: try a fast coarse (network/cell-tower) fix first.
+ * This responds in <2 s and is accurate enough for a 10 km radius search.
+ * High-accuracy GPS is only used as a fallback because a cold Android GPS
+ * takes 20–60 s and reliably times out indoors.
+ */
 export async function getCurrentLocation(): Promise<{
   latitude: number;
   longitude: number;
@@ -17,20 +43,44 @@ export async function getCurrentLocation(): Promise<{
 
     const perm = await Geolocation.requestPermissions();
 
-    // ✅ FIX: "prompt" means Android will show the dialog when we call
-    // getCurrentPosition — it is NOT a denial. Only hard-fail on "denied".
+    // "prompt" = Android will show the dialog on the next call — not a denial.
+    // Only hard-fail on "denied".
     if (perm.location === "denied") {
       throw new Error(
         "Location permission denied. Please enable it in Settings → App → Permissions.",
       );
     }
 
-    // Race against a hard 12-second timeout so the UI never hangs forever.
-    // On a cold GPS fix Android can take several seconds — 10 s is too tight.
-    const pos = await Promise.race([
+    // ── Step 1: fast coarse fix (cell tower / WiFi, usually <2 s) ──
+    // maximumAge:60000 allows a recently cached position so repeat searches
+    // are instant.
+    try {
+      const coarse = await Promise.race([
+        Geolocation.getCurrentPosition({
+          enableHighAccuracy: false,
+          timeout: 8000,
+          maximumAge: 60000,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Coarse location timed out")),
+            10000,
+          ),
+        ),
+      ]);
+      // ✅ Null-check coords — some Android devices resolve with undefined coords
+      return extractCoords(coarse);
+    } catch {
+      // Coarse failed — fall through to high-accuracy GPS
+    }
+
+    // ── Step 2: high-accuracy GPS fallback ──────────────────────────
+    // Cold GPS start needs up to 30 s — give it proper room.
+    const precise = await Promise.race([
       Geolocation.getCurrentPosition({
         enableHighAccuracy: true,
-        timeout: 10000,
+        timeout: 25000,
+        maximumAge: 0,
       }),
       new Promise<never>((_, reject) =>
         setTimeout(
@@ -38,15 +88,13 @@ export async function getCurrentLocation(): Promise<{
             reject(
               new Error("GPS timed out — please step outside or try again."),
             ),
-          12000,
+          28000,
         ),
       ),
     ]);
 
-    return {
-      latitude: pos.coords.latitude,
-      longitude: pos.coords.longitude,
-    };
+    // ✅ Null-check here too
+    return extractCoords(precise);
   }
 
   // ── Web / browser fallback ────────────────────────────────────────
@@ -56,13 +104,14 @@ export async function getCurrentLocation(): Promise<{
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) =>
-        resolve({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        }),
+      (pos) => {
+        try {
+          resolve(extractCoords(pos));
+        } catch (e: any) {
+          reject(e);
+        }
+      },
       (err) => {
-        // Translate browser error codes into readable messages
         const msgs: Record<number, string> = {
           1: "Location permission denied by browser.",
           2: "Location unavailable — check your connection or GPS.",
@@ -70,48 +119,7 @@ export async function getCurrentLocation(): Promise<{
         };
         reject(new Error(msgs[err.code] ?? err.message));
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
     );
   });
-}
-
-/**
- * Reverse geocode coordinates → city & country (OpenStreetMap, no API key)
- */
-export async function reverseGeocode(
-  latitude: number,
-  longitude: number,
-): Promise<{ city: string; country: string }> {
-  const res = await fetch(
-    `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
-    { headers: { "Accept-Language": "en" } },
-  );
-  if (!res.ok) throw new Error("Reverse geocode failed");
-  const data = await res.json();
-  return {
-    city:
-      data.address?.city || data.address?.town || data.address?.village || "",
-    country: data.address?.country || "",
-  };
-}
-
-/**
- * Haversine distance in kilometres between two coordinates.
- * Used to verify freelancer arrival proximity.
- */
-export function haversineKm(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number,
-): number {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
