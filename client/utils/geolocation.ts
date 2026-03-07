@@ -9,8 +9,8 @@ function isNative(): boolean {
 
 /**
  * Extracts lat/lng from a Capacitor GeolocationPosition, throwing a clear
- * error if the position or coords are undefined (happens on some Android
- * devices where getCurrentPosition resolves but returns a malformed object).
+ * error if coords are undefined (happens on some Android devices where
+ * getCurrentPosition resolves but returns a malformed object).
  */
 function extractCoords(pos: any): { latitude: number; longitude: number } {
   const lat = pos?.coords?.latitude;
@@ -122,4 +122,43 @@ export async function getCurrentLocation(): Promise<{
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
     );
   });
+}
+
+/** Reverse geocode coordinates to city/country using OpenStreetMap Nominatim. */
+export async function reverseGeocode(
+  latitude: number,
+  longitude: number,
+): Promise<{ city: string; country: string }> {
+  const res = await fetch(
+    `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
+    { headers: { "Accept-Language": "en" } },
+  );
+  if (!res.ok) throw new Error("Reverse geocode failed");
+  const data = await res.json();
+  return {
+    city:
+      data.address?.city || data.address?.town || data.address?.village || "",
+    country: data.address?.country || "",
+  };
+}
+
+/**
+ * Haversine distance in kilometres between two coordinates.
+ * Used to verify freelancer arrival proximity.
+ */
+export function haversineKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
