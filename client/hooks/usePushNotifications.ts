@@ -1,12 +1,12 @@
 // client/hooks/usePushNotifications.ts
 import { useEffect } from "react";
-import { useUser } from "@/context/UserContext"; // ← ADD
+import { useUser } from "@/context/UserContext";
 
 export function usePushNotifications() {
-  const { user, loading } = useUser(); // ← ADD
+  const { user, loading } = useUser();
 
   useEffect(() => {
-    // ✅ Don't run until we know auth state — avoids 401 on token registration
+    // Don't run until we know auth state — avoids 401 on token registration
     if (loading || !user) return;
 
     const setup = async () => {
@@ -38,13 +38,20 @@ export function usePushNotifications() {
               platform: Capacitor.getPlatform(),
             });
             console.log("[FCM] Token saved to server ✓");
-          } catch (err) {
-            console.error("[FCM] Failed to register token on server:", err);
+          } catch (err: any) {
+            // ✅ Log the full error so we can see exactly why it failed
+            // (e.g. 401 Unauthorized = race condition, network error = wrong API URL)
+            console.error(
+              "[FCM] Failed to register token on server:",
+              err?.response?.status,
+              err?.response?.data,
+              err?.message,
+            );
           }
         });
 
         PushNotifications.addListener("registrationError", (err) => {
-          console.error("[FCM] Registration error:", err);
+          console.error("[FCM] Registration error:", JSON.stringify(err));
         });
 
         PushNotifications.addListener(
@@ -63,8 +70,22 @@ export function usePushNotifications() {
             }
           },
         );
-      } catch (err) {
-        console.log("[FCM] Not running in native app, push skipped");
+      } catch (err: any) {
+        // ✅ Log the real error instead of the misleading "not running in native app" message.
+        // The old catch swallowed all errors with the same message, making it impossible
+        // to distinguish "genuinely running on web" from "crashed during setup".
+        if (
+          err?.message?.toLowerCase().includes("not implemented") ||
+          err?.message?.toLowerCase().includes("native")
+        ) {
+          console.log("[FCM] Not running in native app, push skipped");
+        } else {
+          console.error(
+            "[FCM] Setup failed with unexpected error:",
+            err?.message,
+            err,
+          );
+        }
       }
     };
 
@@ -75,5 +96,5 @@ export function usePushNotifications() {
         .then(({ PushNotifications }) => PushNotifications.removeAllListeners())
         .catch(() => {});
     };
-  }, [user?._id, loading]); // ✅ Re-runs when user logs in, no-op when logged out
+  }, [user?._id, loading]);
 }

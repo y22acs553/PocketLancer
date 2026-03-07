@@ -12,6 +12,7 @@ import androidx.webkit.WebViewFeature;
 import com.getcapacitor.BridgeActivity;
 import java.util.ArrayList;
 import java.util.List;
+import android.webkit.WebView;
 
 public class MainActivity extends BridgeActivity {
 
@@ -19,7 +20,9 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+
         super.onCreate(savedInstanceState);
+        WebView.setWebContentsDebuggingEnabled(true);
         disableWebViewDarkMode();
         requestAllPermissionsOnFirstLaunch();
     }
