@@ -167,7 +167,7 @@ router.post("/", protect, authorize("client"), async (req, res) => {
     advancePayment,
     estimatedHours,
     // ✅ GPS fields from book page location picker
-    locationMode, // "current" | "manual"
+    locationMode, // "current" | "other"
     clientLat,
     clientLng,
   } = req.body;
@@ -284,7 +284,7 @@ router.post("/", protect, authorize("client"), async (req, res) => {
       paymentStatus: isDigital ? "unpaid" : "field_pending",
       deadline,
       // ✅ Store GPS mode + client coords for arrival proximity check
-      locationMode: locationMode || "manual",
+      locationMode: locationMode || "other",
       clientLat: clientLat ? parseFloat(clientLat) : undefined,
       clientLng: clientLng ? parseFloat(clientLng) : undefined,
     });
