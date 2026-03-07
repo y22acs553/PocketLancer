@@ -64,7 +64,12 @@ async function sendFCMPush({ fcmToken, title, body, link }) {
         priority: "high",
         notification: {
           sound: "default",
-          clickAction: "FLUTTER_NOTIFICATION_CLICK",
+          // ✅ FIX: Removed `clickAction: "FLUTTER_NOTIFICATION_CLICK"` — this is
+          // a Flutter-specific intent filter that does NOT exist in a Capacitor app.
+          // Having it set caused Android to fail silently when the user tapped a
+          // notification (no activity matched the intent), so tapping did nothing.
+          // Capacitor's PushNotifications plugin handles the tap via
+          // pushNotificationActionPerformed without any custom clickAction needed.
         },
       },
       apns: {

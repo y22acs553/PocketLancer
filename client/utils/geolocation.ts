@@ -99,8 +99,12 @@ export async function getCurrentLocation(): Promise<{
         ),
       ]);
       return extractCoords(coarse);
-    } catch {
-      // Coarse failed — fall through to high-accuracy GPS
+    } catch (err: any) {
+      // ✅ FIX: Re-throw PERMISSION_DENIED immediately — no point trying
+      // high-accuracy GPS if the user has denied location access entirely.
+      if (err?.message?.startsWith("PERMISSION_DENIED")) throw err;
+      // All other errors (TIMEOUT, POSITION_UNAVAILABLE) fall through to
+      // the high-accuracy GPS attempt below.
     }
 
     // ── Step 2: high-accuracy GPS fallback ──────────────────────────
